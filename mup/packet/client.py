@@ -47,6 +47,7 @@ head_code_map = {
     0xF4: {
         0x02: CServerList,
         0x03: CServerInfo,
+        0x06: CServerList,  # 103e
     },
     0xF1: {
         0x01: CLoginRequest,

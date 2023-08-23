@@ -81,9 +81,10 @@ class Crypt:
                     self.extract(res)
                 res[0] = src[0] - 2
 
+            # todo move out
             if res.head == 0xF1 and res.sub in {1, 0}:
-                self.decrypt_login(res, 4)
-                self.decrypt_login(res, 14)
+                self.decrypt_login(res, 4, 10)
+                self.decrypt_login(res, 14, 20)
 
         return res
 

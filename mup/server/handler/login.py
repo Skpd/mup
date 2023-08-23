@@ -12,6 +12,7 @@ def login_handler(msg: CLoginRequest, proto: BaseProtocol):
 
     try:
         acc = proto.server.account_mapper.load(msg.login)
+        print(acc)
         if acc.active:
             proto.joined = True
             proto.acc = acc

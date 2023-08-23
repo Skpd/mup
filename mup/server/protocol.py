@@ -70,7 +70,7 @@ class BaseProtocol(Protocol):
             # print('Extracted {}'.format(message))
 
         packet = factory(message)
-        # print('Incoming {}'.format(message))
+        print('Incoming {}'.format(message))
 
         if packet and packet.key in self.server.handlers:
             callbacks = self.server.handlers[packet.key]

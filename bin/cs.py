@@ -8,6 +8,7 @@ from mup.server.protocol import BaseProtocol
 def create_cs():
     cs = ConnectServer()
     cs.add_handler(0xF4, 0x02, server_list_handler)
+    cs.add_handler(0xF4, 0x06, server_list_handler)
     cs.add_handler(0xF4, 0x03, server_info_handler)
 
     print('created CS', cs)

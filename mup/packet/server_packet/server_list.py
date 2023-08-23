@@ -3,7 +3,7 @@ from mup.packet.base import Base
 
 class ServerList(Base):
     def __init__(self, servers: list):
-        data = [0xC2, 0, 0, 0xF4, 0x02, len(servers)]
+        data = [0xC2, 0, 0, 0xF4, 0x06, 0, len(servers)]
 
         for n, s in enumerate(servers):
             data.append(s['group'] * 20 + s['code'])
