@@ -1,0 +1,9 @@
+[Software\\Webzen\\Mu\\Config] 1692735224
+#time=1d9d53526f6fd18
+"ID"="skpd"
+"MusicOnOff"=dword:00000000
+"Resolution"=dword:00000003
+"SoundOnOff"=dword:00000000
+"TextInput"=dword:00000001
+"VolumeLevel"=dword:00000000
+"WindowMode"=dword:00000001
