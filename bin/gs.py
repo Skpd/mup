@@ -1,6 +1,7 @@
 import asyncio
 from mup.server.game import GameServer
 from mup.server.handler.attack import attack_handler
+from mup.server.handler.change_name import change_name_handler
 from mup.server.handler.char_list import char_list_handler
 from mup.server.handler.chat import chat_handler
 from mup.server.handler.close import close_handler
@@ -28,6 +29,7 @@ def create_gs(loop):
     gs.add_handler(0xF3, 0x01, create_character_handler)
     gs.add_handler(0xF3, 0x02, delete_character_handler)
     gs.add_handler(0xF3, 0x03, game_start_handler)
+    gs.add_handler(0xF3, 0x15, change_name_handler)
     gs.add_handler(0xF3, 0x30, exit_handler)
     # cs.add_handler(0xF3, 0x06, add_point_handler)
     gs.add_handler(0xF1, 0x01, login_handler)

@@ -14,9 +14,9 @@ def game_start_handler(msg: CJoinGame, proto: BaseProtocol):
 
     # todo load actual data
     proto.player = Player()
-    proto.player.name = msg.name
+    proto.player.name = str(msg.name)
 
-    proto.server.get_my_viewport(proto.player.map_id, proto.player.x, proto.player.y)[proto.cid] = proto
+    # proto.server.get_my_viewport(proto.player.map_id, proto.player.x, proto.player.y)[proto.cid] = proto
 
     """
 hp              c1:07:26:fe:00:8f:00
@@ -31,25 +31,42 @@ meet self       c2:00:25:12:01:92:c8:84:46:00:ff:ff:33:33:3c:0d:b6:c0:00:00:00:0
 qwe binds       c1:13:f3:30:00:05:0b:04:11:00:00:00:00:00:09:00:04:08:0f
 """
     proto.write(bytearray([0xC1, 0x04, 0x0F, 0x29]))
-    proto.write(bytearray([0xC1, 0x06, 0x03, 0x29, 0x1D, 0x50]))
+    # proto.write(bytearray([0xC1, 0x06, 0x03, 0x29, 0x1D, 0x50]))
 
+    proto.write(bytearray.fromhex('c118 26fe 0050 0000 6300 00005000 0000 6300 0000 0100 0000'))
+    proto.write(bytearray.fromhex('c110 27fe 001e 0014 1e00 00001400 0000'))
+    # proto.write(bytearray.fromhex('c106 0300 0fc2'))
     proto.write(SStats(proto.player))
     proto.write(SInventory(proto.player.inventory))
+    # proto.write(bytearray.fromhex('c1 18 f311 0600 002e 06014303 0244 0403 4505 0446 0605 4707 c106a006 ffff'))
+    proto.write(bytearray.fromhex('c1 05 f311 00'))
+    proto.write(bytearray.fromhex('c1 06 a006 ffff'))
     proto.write(SMeetPlayer(proto.cid, proto.player))
 
-    magic_list = [0x0B, 0x11]
-    for i in range(1, 10):
-        magic_list.append(i)
-        magic_list.append(i+0)
+    # GCAnsMapSvrAuth (iIndex, iSendResult);
+    #         DataSend(aIndex, (LPBYTE)&pjMsg, pjMsg.h.size);         // ¿©±â±îÁö ÇÏ¸é »ç¶÷ÀÇ ¸ð½À¸¸ º¸ÀÎ´Ù.
+    #         GCItemListSend(aIndex);                                                         // ¿©±â±îÁö ÇÏ¸é »ç¶÷ÀÌ ÀåºñÇÑ °ÍÀÌ º¸ÀÎ´Ù.
+    #         GCMagicListMultiSend( lpObj );                                          // ¿©±â±îÁö ÇÏ¸é »ç¶÷ÀÇ ¸¶¹ý¸®½ºÆ®¸¦ ÇÑ¹æ¿¡ º¸³½´Ù.
+    # GCSendMapMoveChecksum
+    # GCSendFatigueInfo
+    # proto.write(bytearray([0xC1, 5, 0xB1, 0x01, 0x01]))
+    proto.write(bytearray([0xC1, 5, 0xBF, 0x15, 0x5A]))
 
-    magic = Base(bytearray([0xC1, 0x00, 0xF3, 0x11, len(magic_list)//2, *magic_list]))
-    magic.length = len(magic)
-    proto.write(magic)
+    # magic_list = [0x0B, 0x11]
+    # for i in range(1, 10):
+    #     magic_list.append(i)
+    #     magic_list.append(i+0)
 
-    for c in proto.server.get_monsters_within(proto.player.x, proto.player.y):
-        proto.write(SMeetMonster(c))
+    # magic = Base(bytearray([0xC1, 0x00, 0xF3, 0x11, 0x00, 0]))
+    # magic.length = len(magic)
+    # proto.write(magic)
+    #
+    # proto.write(bytearray([0xC1, 6, 0x8E, 0x01, 0x00, 0x00]))
 
-    for c in proto.server.get_players_within(proto.player.x, proto.player.y):
-        if c != proto:
-            proto.write(SMeetPlayer(c.cid, c.player))
-            c.write(SMeetPlayer(proto.cid, proto.player))
+    # for c in proto.server.get_monsters_within(proto.player.x, proto.player.y):
+    #     proto.write(SMeetMonster(c))
+    #
+    # for c in proto.server.get_players_within(proto.player.x, proto.player.y):
+    #     if c != proto:
+    #         proto.write(SMeetPlayer(c.cid, c.player))
+    #         c.write(SMeetPlayer(proto.cid, proto.player))

@@ -15,6 +15,7 @@ from mup.packet.client_packet.chat import Chat as Chat097
 from mup.packet.client_packet.attack import Attack as Attack097
 from mup.packet.client_packet.magic_attack import MagicAttack as MagicAttack097
 from mup.packet.client_packet.magic_aoe import MagicAOE as MagicAOE097
+from mup.packet.client_packet.change_name import ChangeNameRequest as ChangeName103
 
 CLoginRequest = LoginRequest097
 CServerList = ServerList097
@@ -24,6 +25,7 @@ CCharCreate = CharCreate097
 CCharDelete = CharDelete097
 CPing = Ping097
 CJoinGame = JoinGame087
+CChangeName = ChangeName103
 CClientClose = ClientClose097
 CExit = Exit097
 CRotate = Rotate097
@@ -58,6 +60,7 @@ head_code_map = {
         0x01: CCharCreate,
         0x02: CCharDelete,
         0x03: CJoinGame,
+        0x15: CChangeName,
         0x30: CExit
     },
 }

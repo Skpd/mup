@@ -1,6 +1,7 @@
 import struct
 from mup.common.timer import Timer
 from mup.packet.base import Base
+from mup.packet.server_packet.char_list import CharList
 
 
 class Crypt:
@@ -72,7 +73,6 @@ class Crypt:
             src_pos += 11
 
         res = Base(res[:dec_result])
-        # print(res[1])
         res.length = dec_result
 
         if dec_result > 0:
@@ -257,9 +257,60 @@ class Crypt:
 
 
 if __name__ == '__main__':
-    server = Crypt(decode_keys='/tmp/Dec1.dat')
+    server = Crypt(decode_keys='../../data/Dec1.dat', encode_keys='../../data/Enc2.dat')
     client = Crypt(decode_keys='/tmp/Dec2.dat')
-    client.do_extract = False
+    client.do_extract = True
+
+    packets = [
+        'c3 18 bb 52 4c be cd f1 60 d6 54 54 61 4a 0a 42 bc d2 69 21 f5 e1 41 7f',
+        # 'c10ef379b66f8097b41ce2541d40',
+        'c118 26fe 0050 0000 6300 00005000 0000 6300 0000 0100 0000',
+        'c110 27fe 001e 0014 1e00 00001400 0000',
+        'c118 26fe 0062 0000 63f6 5a196200 0000 6300 0000 38f1 5a19',
+        'c110 27fe001e 0014 1e00 0000 1400 0000',
+        'c106 0300 0fc2',
+        'c35a 6459 4c6b 0473 52af 34d5 e0f5 9a1e 2d85 86d2 12e0 4174 de20 382c c567 e000 01da ef3e 9e0c 1dcd 7c83 2c8d ffca 60c9 3609 8543 9281 2cd3 e644 810e 140f 7853 8d90 4b7e e25e 3030 0020 0186 6824 11f3 6d37 0983 5c61 9808 1c22',
+        """c400 3aba5e1c 2e82 5f17 a2c4 dbee 6bdb 1642 07fed473 1c98 ad6b db3b 3b4a f101 e77c 83b6321e 257c 09d4 01ad 5c0a 3f32 1e0c 728452d4 5c01 0039""",
+        """c118 f311 0600 002e 06014303 0244 0403 4505 0446 0605 4707 c106a006 ffff""",
+        """
+        meet
+        c2 0031 12 
+        01 # players 
+        a2e4  id 
+        91  x 
+        79  y 
+        40  class elf 
+        0f00ffffff000000f80000808fffff0000000000000000  inventory 
+        736b7064000000000000  name 
+        91  x
+        79  y
+        03  path
+        000000  unk
+        """,
+        'c1 05b2 1900',
+        'c1 05b2 1900',
+        'c105 b801 00',
+        'c1 18 26 fe00 5000 0063 0000 0050 0000 00630000 0001 0000 00',
+        'c1 1027 fe00 1e00 141e0000 0014 0000 00',
+        'c1 1826 fe00 6200 0063 f65a 1962 0000 0063 0000 0038 f15a 19',
+        'c1 1027 fe00 1e00 141e 0000 0014 0000 00',
+        'c1 18d0 2500 0000 0000 0000 0000 0000 00ff ffff ffff ffff ff',
+        'c2 0034 d276 00b7 59e4 2200 00e4 f219 0098 05b7 5900 0000 00c1 18d0 2500 0000 0000 0000 0000 0000 0000 0000 00ff ffff ff00 0027 54',
+        'c1 30d0 1302 c527 549b 41e8 6400 0000 0020 a107 0040 420f 0060 e316 0000 0000 007e aaaa 3d00 0000 0000 0000 0000 0000 00',
+        'c2 0020 d270 0000 0020 a107 0040 420f 0060 e316 0000 0000 0000 0000 0000 0000 00'
+    ]
+
+    for p in packets:
+        b = bytearray.fromhex(p)
+        print('before', b.hex(' ', 2))
+        if b[0] in {0xC3, 0xC4}:
+            r = server.decrypt(b)
+            print('after', r.hex(' ', 2))
+        # else:
+        #     client.extract(b)
+        #     print('after', b.hex(' ', 2))
+
+    exit(0)
 
     pa = [
         'c3:4f:f5:30:01:00:93:36:00:4e:2d:15:20:fb:eb:0e:ae:8a:3b:f3:85:42:d4:e1:9f:74:3c:c5:58:39:c2:53:f0:be:8b:8b:0c:22:1d:80:6b:75:90:6d:1a:2f:61:f8:2a:f7:dc:d3:55:d7:59:43:76:9d:e4:24:ba:0a:76:46:f2:40:8f:ba:13:02:0b:ff:1d:73:e4:2b:c5:6b:55',

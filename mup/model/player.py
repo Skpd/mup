@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+from enum import Enum
 from typing import List
 from mup.model.account import Account
 from mup.model.item import Item
@@ -6,15 +8,40 @@ BASE_EXP = 100
 EXP_LOG = 5
 
 
+class CharacterClass(Enum):
+    """
+    4th bit - third evo
+    5th bit - second evo
+    6, 7, 8 bits - class
+    """
+    DARK_WIZARD = 0b00000000
+    SOUL_MASTER = 0b00010000
+    GRAND_MASTER = 0b00011000
+    DARK_KNIGHT = 32
+    BLADE_KNIGHT = 48
+    BLADE_MASTER = 56
+    ELF = 64
+    MUSE_ELF = 80
+    HIGH_ELF = 88
+    MAGIC_GLADIATOR = 96
+    DUEL_MASTER = 120
+    DARK_LORD = 128
+    LORD_EMPEROR = 152
+    SUMMONER = 160
+    BLOODY_SUMMONER = 176
+    DIMENSION_MASTER = 184
+
+
+@dataclass
 class Player:
-    id: object
+    id: object = None
     player_id: int = 0
     index: int = 0
-    name: str = 0
+    name: str = 'unset'
     level: int = 1
-    exp: int = 0
+    exp: int = 1
     role_code: int = 0
-    class_type: int = 0
+    class_type: CharacterClass = CharacterClass.DARK_WIZARD
     state: int = 0
     life: int = 100
     max_life: int = 200
@@ -27,11 +54,11 @@ class Player:
     free_points: int = 0
     zen: int = 31337
     pk: int = 3
-    map_id: int = 0
+    map_id: int = 3
     x: int = 128
     y: int = 188
-    inventory: List[Item] = []
-    account: Account = Account()
+    inventory: List[Item] = list
+    account: Account = None
 
     @property
     def next_exp(self):

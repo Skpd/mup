@@ -1,5 +1,5 @@
 #!/bin/bash
-set -x
+#set -x
 vhome="${HOME}/tmp/.winestorage"
 # SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 CLIENT_PATH=$1
@@ -15,7 +15,6 @@ if [ ! -d "$CLIENT_PATH" ]; then
 fi
 
 docker run --rm \
-  --name wine \
   -e DISPLAY \
   -e WINEPREFIX=/wine/game \
   -v /tmp/.X11-unix:/tmp/.X11-unix \

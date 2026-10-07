@@ -4,10 +4,15 @@ from mup.packet.base import Base
 
 class CharList(Base):
     def __init__(self, chars: list):
-        data = bytearray([0xC1, 0, 0xF3, 0, len(chars)])
+        data = bytearray([
+            0xC3, 0, 0xF3, 0,
+            5,  # max class - dk, dw, els, mg, dl
+            0,  # unk / move ?
+            len(chars)  # count
+        ])
 
-        for c in chars:
-            data += self.__build_char(c)
+        for i, c in enumerate(chars):
+            data += self.__build_char(i, c)
 
         # item, empty - max
         # rh - 0-7 << 5 | 0-31
@@ -19,22 +24,23 @@ class CharList(Base):
         # rh | lh << 3 | h << 3 | a << 3 | p << 3 | g << 3 | b << 3 - 3ch
         # item overflow flag, 1bit each, items, rh lh, ?
         # excl flag, 1bit each, items, rh lh, ?
+        # | 1 2 3 4 5 6 7 8 |
+        #
 
         super().__init__(data)
         self.length = len(self)
 
-    def __build_char(self, p: Player):
+    def __build_char(self, index, p: Player):
         data = bytearray([
-            p.index,  # position
-            *bytearray(p.name.encode('ascii')).ljust(10, b'\0'), 0x00,
-            p.level & 0xFF, (p.level >> 8) & 0xFF,  # lvl little endian
-            p.role_code,  # ctl
-            p.class_type,  # class,
-            *[
-                0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                0, 0, 0,
-                0xF8, 0,
-            ]  # set
+            index,  # position
+            *bytearray(p.name.encode('ascii')).ljust(10, b'\0'),
+            0x00,  # unk
+            p.level & 0xFF,  # lvl low
+            (p.level >> 8) & 0xFF,  # lvl hi
+            0x00,  # ctl,
+            p.class_type.value,  # class
+            *[0x00] * 17,  # inventory
+            0x00  # guild status 0x00, 0x20, 0x40, 0x80
         ])
 
         return data

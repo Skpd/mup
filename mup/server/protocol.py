@@ -1,3 +1,6 @@
+import sys
+import binascii
+import logging
 from asyncio import Protocol
 from asyncio.transports import Transport
 from mup.common.crypt import Crypt
@@ -27,6 +30,13 @@ class BaseProtocol(Protocol):
         # self.crypt = Crypt(decode_keys='/tmp/server065/data/Dec1.dat', encode_keys='/tmp/server065/data/Enc2.dat')
         self.server = gs
 
+        self.logger = logging.getLogger('connection')
+        log_format = logging.Formatter('\r%(asctime)s %(levelname)s: %(message)s\r')
+        stdout_handler = logging.StreamHandler(sys.stdout)
+        stdout_handler.setFormatter(log_format)
+        self.logger.addHandler(stdout_handler)
+        self.logger.setLevel(logging.DEBUG)
+
     def disconnect(self):
         self.server.disconnect(self)
         self.transport.write(b'')
@@ -39,9 +49,10 @@ class BaseProtocol(Protocol):
         self.connected = True
 
     def write(self, what, raw=False):
+        self.logger.debug('> {}'.format(what))
         if what[0] in {0xC3, 0xC4} and not raw:
             what = self.crypt.encrypt(what)
-        print('Sending {}'.format(what))
+            self.logger.debug('!!> {}'.format(what))
         self.transport.write(what)
 
     def send_all(self, msg, except_self=True):
@@ -57,27 +68,27 @@ class BaseProtocol(Protocol):
 
     def data_received(self, data):
         message = Base(data)
-        # print('Received {}'.format(message))
+        self.logger.debug('< {}'.format(binascii.hexlify(message, sep=' ')))
 
         if message[0] in {0xC3, 0xC4}:
             try:
                 message = self.crypt.decrypt(message)
             except RuntimeError as e:
-                print(e, message, len(message))
-            # print('Decrypted {}'.format(message))
+                self.logger.error(e, message, len(message))
+            self.logger.debug('Decrypted {}'.format(binascii.hexlify(message, sep=' ')))
         elif message[0] in {0xC1, 0xC2} and self.joined:
             self.crypt.extract(message, message[0] == 0xC2)
-            # print('Extracted {}'.format(message))
+            self.logger.debug('Extracted {}'.format(binascii.hexlify(message, sep=' ')))
 
         packet = factory(message)
-        print('Incoming {}'.format(message))
+        # self.logger.debug('<! {}'.format()
 
         if packet and packet.key in self.server.handlers:
             callbacks = self.server.handlers[packet.key]
             if not len(callbacks):
-                print('No handlers for {}'.format(packet.key))
+                self.logger.warning('No handlers for {}'.format(packet.key))
 
             for c in callbacks:
                 c(packet, self)
         else:
-            print('No handlers for {}'.format(message))
+            self.logger.warning('No handlers for {}'.format(message))

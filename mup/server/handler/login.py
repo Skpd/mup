@@ -10,16 +10,23 @@ def login_handler(msg: CLoginRequest, proto: BaseProtocol):
     # todo check passw
     # todo check version / serial
 
-    try:
-        acc = proto.server.account_mapper.load(msg.login)
-        print(acc)
-        if acc.active:
-            proto.joined = True
-            proto.acc = acc
-            res = SLoginResult.SUCCESS
-        else:
-            res = SLoginResult.ACCOUNT_BANNED
-    except NotFoundError:
-        res = SLoginResult.INVALID_ACCOUNT
+    from mup.model.account import Account
+    res = SLoginResult.SUCCESS
+    proto.joined = True
+    proto.acc = Account()
+    proto.acc.name = "Skpd"
+    proto.acc.id = 1
+
+    # try:
+    #     acc = proto.server.account_mapper.load(msg.login)
+    #     print(acc)
+    #     if acc.active:
+    #         proto.joined = True
+    #         proto.acc = acc
+    #         res = SLoginResult.SUCCESS
+    #     else:
+    #         res = SLoginResult.ACCOUNT_BANNED
+    # except NotFoundError:
+    #     res = SLoginResult.INVALID_ACCOUNT
 
     proto.write(SLoginResult(res))

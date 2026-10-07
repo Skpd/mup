@@ -10,19 +10,15 @@ class MeetPlayer(Base):
         data += bytearray([
             cid >> 8, cid & 0xFF,
             p.x, p.y,
-            p.class_type,  # class class << 5 | skin << 4 | pose
-            *[
-                0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                0, 0, 0,
-                0xF8, 0,
-            ],
-            0,
-            p.state,  # state
-            p.role_code,
-            *bytearray(p.name).ljust(10, b'\0'),  # name
+            p.class_type.value,  # class
+            *[0x00] * 23,
+            *bytearray(p.name.encode('ascii')).ljust(10, b'\0'),  # name
             p.x, p.y,  # tx ty
-            0 << 4 | p.pk  # direction << 4 | pk status
+            0,  # path
+            0, 0, 0  # unk
         ])
+
+        data += bytearray([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
         super().__init__(data)
         self.length = len(self)

@@ -139,7 +139,7 @@ class GameServer(ServerBase):
 
     def add_connection(self, c):
         # todo
-        c.cid = 4808
+        c.cid = 123
         # c.cid = len(self.connections)
         self.connections[c.cid] = c
         print('added connection', c)
