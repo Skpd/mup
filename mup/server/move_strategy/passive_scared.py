@@ -1,8 +1,11 @@
+import logging
 import random
 from mup.model.monster import Monster
 from mup.server.game import GameServer
 from mup.server.protocol import BaseProtocol
 from mup.packet.server import SMove, SClear, SMeetMonster
+
+logger = logging.getLogger(__name__)
 
 
 def move(me: Monster, server: GameServer):
@@ -16,7 +19,7 @@ def move(me: Monster, server: GameServer):
         if isinstance(c, BaseProtocol):
             anyone_near = True
             near_distance = [(me.x - c.player.x,) ,..., (me.y - c.player.y,)]
-            print('Me #{} {}:{} scared of #{} {}:{}'.format(me.cid, me.x, me.y, c.cid, c.player.x, c.player.y))
+            logger.debug('Me #%s %s:%s scared of #%s %s:%s', me.cid, me.x, me.y, c.cid, c.player.x, c.player.y)
             break
 
     if not anyone_near:
@@ -29,13 +32,13 @@ def move(me: Monster, server: GameServer):
     new_nearby = set(server.get_players_within(me.map_id, *new_pos, distance=5))
 
     for c in (currently_nearby | new_nearby):
-        c.write(SMove(me.cid, *new_pos, 0))
+        c.write(SMove(cid=me.cid, x=new_pos[0], y=new_pos[1], direction=0))
 
     for c in new_nearby - currently_nearby:
-        c.write(SMeetMonster(me, *new_pos))
+        c.write(SMeetMonster.of([me]))
 
     for c in currently_nearby - new_nearby:
-        c.write(SClear(me.cid))
+        c.write(SClear.of([me.cid]))
 
     me.x = new_pos[0]
     me.y = new_pos[1]

@@ -16,8 +16,8 @@ def move(me: Monster, server: GameServer):
 
     for c in server.get_all_within_distance(me.map_id, *cur_pos):
         if isinstance(c, BaseProtocol):
-            c.write(SMeetMonster(me, tx=new_pos[0], ty=new_pos[1]))
-            c.write(SMove(me.cid, *new_pos, 0))
+            c.write(SMeetMonster.of([me]))
+            c.write(SMove(cid=me.cid, x=new_pos[0], y=new_pos[1], direction=0))
 
     me.x = new_pos[0]
     me.y = new_pos[1]

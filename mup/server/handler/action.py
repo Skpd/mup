@@ -10,7 +10,7 @@ def action_handler(msg: CRotate, proto: BaseProtocol):
 
     p.direction = msg.direction & 0x07
 
-    action = SAction(proto.cid, p.direction, msg.action)
+    action = SAction(cid=proto.cid, direction=p.direction, action=msg.action)
     for c in proto.server.get_players_within(p.map_id, p.x, p.y):
         if c != proto:
             c.write(action)

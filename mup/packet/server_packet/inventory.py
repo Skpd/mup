@@ -1,10 +1,10 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C4, u8
 
 
-class Inventory(Base):
-    def __init__(self, items):
-        # todo items: count, then slot + item data per item
-        data = [0xC4, 0, 0, 0xF3, 0x10, 0x00]
-
-        super().__init__(data)
-        self.length = len(self)
+class Inventory(Packet):
+    """C4 F3 10: must be encrypted. Sent empty until the item layout is known (roadmap M3)."""
+    code = C4, 0xF3, 0x10
+    size = 6
+    fields = (
+        (5, 'item_count', u8, 0),  # then slot + item data per item
+    )

@@ -1,20 +1,16 @@
-import sys
-import binascii
 import logging
 from asyncio import Protocol
 from asyncio.transports import Transport
 from mup.common.crypt import Crypt
+from mup.config import PACKET_LOGGER
 from mup.model.account import Account
 from mup.model.player import Player
 from mup.packet.base import Base
 from mup.packet.client import factory
 from mup.server.game import GameServer
 
-logger = logging.getLogger('connection')
-log_handler = logging.StreamHandler(sys.stdout)
-log_handler.setFormatter(logging.Formatter('\r%(asctime)s %(levelname)s: %(message)s\r'))
-logger.addHandler(log_handler)
-logger.setLevel(logging.DEBUG)
+logger = logging.getLogger(__name__)
+packet_logger = logging.getLogger(PACKET_LOGGER)
 
 
 class BaseProtocol(Protocol):
@@ -25,6 +21,7 @@ class BaseProtocol(Protocol):
     acc: Account = None
 
     cid = None
+    peer = None
     connected = False
     joined = False
     playing = False
@@ -38,27 +35,38 @@ class BaseProtocol(Protocol):
         self.buffer = bytearray()
         self.logger = logger
 
+    @property
+    def tag(self):
+        """Connection name in the log: cid on the game server, address on the connect server."""
+        return self.cid if self.cid is not None else self.peer
+
+    def log_packet(self, what, data):
+        if packet_logger.isEnabledFor(logging.DEBUG):
+            packet_logger.debug('%s %s %s', self.tag, what, data.hex(' '))
+
     def disconnect(self):
         self.transport.close()
 
     def connection_made(self, transport):
         self.transport = transport
+        self.peer = '{}:{}'.format(*transport.get_extra_info('peername')[:2])
+        self.logger.info('Connection from %s', self.peer)
         self.server.add_connection(self)
         self.connected = True
 
     def connection_lost(self, exc):
         self.connected = False
         self.server.disconnect(self)
-        self.logger.debug('Connection {} closed'.format(self.cid))
+        self.logger.info('Connection %s closed', self.tag)
 
     def write(self, what, raw=False):
         if self.transport.is_closing():
             return
 
-        self.logger.debug('> {}'.format(binascii.hexlify(what, sep=' ')))
+        self.log_packet('>', what)
         if what[0] in {0xC3, 0xC4} and not raw:
             what = self.crypt.encrypt(what)
-            self.logger.debug('!!> {}'.format(binascii.hexlify(what, sep=' ')))
+            self.log_packet('!!>', what)
         self.transport.write(what)
 
     def send_all(self, msg, except_self=True):
@@ -78,7 +86,7 @@ class BaseProtocol(Protocol):
 
         while self.buffer and not self.transport.is_closing():
             if self.buffer[0] not in {0xC1, 0xC2, 0xC3, 0xC4}:
-                self.logger.error('Not a packet: {}'.format(binascii.hexlify(self.buffer, sep=' ')))
+                self.logger.error('Not a packet: %s', self.buffer.hex(' '))
                 self.disconnect()
                 return
 
@@ -88,7 +96,7 @@ class BaseProtocol(Protocol):
 
             size = self.buffer[1] << 8 | self.buffer[2] if header_size == 3 else self.buffer[1]
             if size <= header_size:
-                self.logger.error('Invalid packet size: {}'.format(binascii.hexlify(self.buffer, sep=' ')))
+                self.logger.error('Invalid packet size: %s', self.buffer.hex(' '))
                 self.disconnect()
                 return
 
@@ -100,31 +108,27 @@ class BaseProtocol(Protocol):
             self.packet_received(message)
 
     def packet_received(self, message: Base):
-        self.logger.debug('< {}'.format(binascii.hexlify(message, sep=' ')))
+        self.log_packet('<', message)
 
         if message[0] in {0xC3, 0xC4}:
             try:
                 message = self.crypt.decrypt(message)
             except RuntimeError as e:
-                self.logger.error('{} ({} bytes)'.format(e, len(message)))
+                self.logger.error('%s (%s bytes)', e, len(message))
                 return
-            self.logger.debug('Decrypted {}'.format(binascii.hexlify(message, sep=' ')))
+            self.log_packet('Decrypted', message)
         elif message[0] in {0xC1, 0xC2} and self.joined:
             self.crypt.extract(message, message[0] == 0xC2)
-            self.logger.debug('Extracted {}'.format(binascii.hexlify(message, sep=' ')))
+            self.log_packet('Extracted', message)
 
         try:
             packet = factory(message)
 
             if packet and packet.key in self.server.handlers:
-                callbacks = self.server.handlers[packet.key]
-                if not len(callbacks):
-                    self.logger.warning('No handlers for {}'.format(packet.key))
-
-                for c in callbacks:
+                for c in self.server.handlers[packet.key]:
                     c(packet, self)
             else:
-                self.logger.warning('No handlers for {}'.format(binascii.hexlify(message, sep=' ')))
+                self.logger.warning('Unhandled packet %s', message.hex(' '))
         except Exception:
             # keep the connection, one broken handler shouldn't kick the player
-            self.logger.exception('Failed to handle {}'.format(binascii.hexlify(message, sep=' ')))
+            self.logger.exception('Failed to handle %s', message.hex(' '))

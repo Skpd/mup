@@ -1,12 +1,14 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, Entry, C1, u8
 
 
-class SkillList(Base):
-    def __init__(self, skills):
-        data = bytearray([0xC1, 0, 0xF3, 0x11, len(skills)])
+class SkillList(Packet):
+    """C1 F3 11: skills, at most 20. The list index is what the client sends when casting."""
+    code = C1, 0xF3, 0x11
+    entry = Entry(count=(4, u8), size=3, fields=(
+        (0, 'slot', u8),
+        (1, 'skill', u8),
+    ))
 
-        for index, skill in enumerate(skills):
-            data += bytearray([index, skill, 0])  # list index, skill number, skill level
-
-        super().__init__(data)
-        self.length = len(self)
+    @classmethod
+    def of(cls, skills):
+        return cls(entries=[{'slot': i, 'skill': s} for i, s in enumerate(skills)])

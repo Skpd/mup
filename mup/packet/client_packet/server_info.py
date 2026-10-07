@@ -1,12 +1,10 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C1, u16
 
 
-class ServerInfo(Base):
-    server_code = None
-    server_group = None
-
-    def __init__(self, src):
-        super().__init__(src)
-
-        self.server_code = self[4] % 20
-        self.server_group = int(self[4] / 20)
+class ServerInfo(Packet):
+    """C1 F4 03: game server address request, not xored."""
+    code = C1, 0xF4, 0x03
+    size = 6
+    fields = (
+        (4, 'server_code', u16),  # group * 20 + index
+    )

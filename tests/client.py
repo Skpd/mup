@@ -4,8 +4,9 @@ client does (same keys, encryption, xor and packet layouts, see docs/protocol-09
 
 usage: ./venv/bin/python tests/client.py
 Exits non zero on the first failed check and prints the end of the server logs.
-Ports 44405 and 55901 must be free, stop running servers first.
+The servers run with their own config on ports 44415 and 55911, so the test can run next to the usual servers.
 """
+import os
 import socket
 import struct
 import subprocess
@@ -19,10 +20,20 @@ sys.path.insert(0, str(ROOT))
 
 from mup.common.crypt import Crypt  # noqa: E402
 from mup.packet.base import Base  # noqa: E402
+from mup.packet.server import SDamage  # noqa: E402
 
 HOST = '127.0.0.1'
-CS_PORT = 44405
-GS_PORT = 55901
+CS_PORT = 44415
+GS_PORT = 55911
+CONFIG = """
+[network]
+cs_port = {}
+gs_port = {}
+gs_host = {}
+[log]
+log_level = DEBUG
+log_packets = yes
+""".format(CS_PORT, GS_PORT, HOST)
 
 
 class ClientCrypt(Crypt):
@@ -145,7 +156,8 @@ def login_and_enter(account, password, char_name, class_type=0, create=True):
     check(bytes(p) == bytes([0xC1, 0x04, 0x00, 0x01]), 'cs hello')
     cs.send([0xC1, 0, 0xF4, 0x02])
     p = cs.recv_until(key(0xF4, 0x02), what='server list')
-    check(p[0] == 0xC2 and p[5] == 1 and p[6] | p[7] << 8 == 0, 'server list has server 0: ' + p.hex(' '))
+    check(p[0] == 0xC2 and p[5] == 1 and len(p) == 6 + 4 and p[6] | p[7] << 8 == 0,
+          'server list has server 0, 4 bytes per server: ' + p.hex(' '))
     cs.send([0xC1, 0, 0xF4, 0x03, 0x00, 0x00])
     p = cs.recv_until(key(0xF4, 0x03), what='server info')
     ip = bytes(p[4:20]).split(b'\0')[0].decode()
@@ -186,18 +198,50 @@ def login_and_enter(account, password, char_name, class_type=0, create=True):
     gs.send([0xC1, 0, 0xF3, 0x03, *name10(char_name)])
     p = gs.recv_until(key(0xF3, 0x03), what='char info')
     x, y, map_id, _, exp, next_exp = struct.unpack('<4B2I', bytes(p[4:16]))
-    # todo money (36) and pk level (40) once stats.py sends the client's layout, docs/roadmap.md M0
     check(not create or (x, y, map_id, exp, next_exp) == (128, 188, 0, 0, 100),
           'char info x{} y{} map{} exp {}/{}'.format(x, y, map_id, exp, next_exp))
+    money, pk_level, ctl = struct.unpack('<I2B', bytes(p[36:42]))
+    check(len(p) == 42 and (money, pk_level, ctl) == (31337, 3, 0),
+          'char info is 42 bytes, money {} at 36, pk level {} at 40, ctl {} at 41'.format(money, pk_level, ctl))
     gs.recv_until(key(0xF3, 0x10), what='inventory')
     p = gs.recv_until(of(0x12, gs.cid, at=5), what='meet self')
-    check(bytes(p[23:33]).rstrip(b'\0').decode() == char_name, 'meet self, name at entry + 18')
+    check(p[4] == 1 and len(p) == 5 + 32 and bytes(p[23:33]).rstrip(b'\0').decode() == char_name,
+          'meet self, one 32 byte entry, name at entry + 18')
     p = gs.recv_until(key(0xF3, 0x11), what='skill list')
     print('  skills', [p[5 + i * 3 + 1] for i in range(p[4])])
+    check(not any(p.head == 0x0F for p in gs.inbox), 'no weather packet on join')
     return gs, 1
 
 
+def check_server_code():
+    """F4 03 carries the server code in 2 bytes: 256 is not server 0"""
+    cs = Conn(CS_PORT, 'cs-code')
+    cs.recv_until(key(0x00, 0x01), what='hello')
+    cs.send([0xC1, 0, 0xF4, 0x03, 0x00, 0x01])
+    try:
+        p = cs.recv_until(key(0xF4, 0x03), what='closed connection')
+        check(False, 'server code 256 answered as ' + p.hex(' '))
+    except EOFError:
+        check(True, 'server code 256 is unknown, connection closed')
+
+
+def check_packets():
+    """Builders the scripted play doesn't reach, checked against the bytes the client reads."""
+    p = SDamage.of(0x1234, 300)
+    check(bytes(p) == bytes([0xC1, 7, 0x15, 0x12, 0x34, 0x01, 0x2C]), 'damage 300: ' + p.hex(' '))
+    p = SDamage.of(0x1234, 300, SDamage.CRITICAL)
+    check(p[5] == 0x81 and damage(p) == 300, 'critical damage 300, blue flag in bit 7 of [5]: ' + p.hex(' '))
+    p = SDamage.of(0x1234, 9000, SDamage.EXCELLENT)
+    check(p[5] == 0x5F and p[6] == 0xFF, 'damage 9000 shows the 13 bit maximum 8191, green flag: ' + p.hex(' '))
+
+
 def play():
+    print('packets')
+    check_packets()
+
+    print('connect server')
+    check_server_code()
+
     print('player A (dark wizard)')
     a, _ = login_and_enter('alice', 'pw1', 'Alice', 0)
     p = a.recv_until(key(0x13), what='meet monster')
@@ -344,11 +388,15 @@ def main():
 
     logs = {}
     servers = []
+    config = tempfile.NamedTemporaryFile('w', prefix='mu-test-', suffix='.ini')
+    config.write(CONFIG)
+    config.flush()
     try:
         for script in ('bin/cs.py', 'bin/gs.py'):
             log = tempfile.NamedTemporaryFile('w+', prefix=Path(script).stem + '-', suffix='.log', delete=False)
             logs[script] = log
-            servers.append(subprocess.Popen([sys.executable, '-u', script], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT))
+            servers.append(subprocess.Popen([sys.executable, '-u', script], cwd=ROOT, stdout=log,
+                                            stderr=subprocess.STDOUT, env={**os.environ, 'MU_CONFIG': config.name}))
 
         deadline = time.time() + 10
         while not (port_open(CS_PORT) and port_open(GS_PORT)):
@@ -370,6 +418,7 @@ def main():
         for s in servers:
             s.terminate()
             s.wait(5)
+        config.close()
 
 
 if __name__ == '__main__':

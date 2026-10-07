@@ -1,12 +1,15 @@
+import logging
 from mup.error import NotFoundError
 from mup.model.account import Account
 from mup.packet.client import CLoginRequest
 from mup.packet.server import SLoginResult
 from mup.server.protocol import BaseProtocol
 
+logger = logging.getLogger(__name__)
+
 
 def login_handler(msg: CLoginRequest, proto: BaseProtocol):
-    print('Login: {}. Version: {}. Serial: {}'.format(msg.login, msg.version, msg.serial))
+    logger.info('Login %s, version %s, serial %s', msg.login, msg.version, msg.serial)
 
     # todo check version / serial
 
@@ -17,7 +20,7 @@ def login_handler(msg: CLoginRequest, proto: BaseProtocol):
         # the client can't register, so the first login creates the account
         acc = Account(name=msg.login, password=msg.passw)
         accounts.store(acc)
-        print('Created account {}'.format(acc.name))
+        logger.info('Created account %s', acc.name)
 
     if acc.password != msg.passw:
         res = SLoginResult.BAD_PASSWORD
@@ -28,4 +31,4 @@ def login_handler(msg: CLoginRequest, proto: BaseProtocol):
         proto.acc = acc
         res = SLoginResult.SUCCESS
 
-    proto.write(SLoginResult(res))
+    proto.write(SLoginResult(result=res))

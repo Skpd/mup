@@ -1,12 +1,11 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C1, str10
 
 
-class CharDelete(Base):
-    name = None
-    passw = None
-
-    def __init__(self, src):
-        super().__init__(src)
-
-        self.name = src[4:14].decode('latin-1').strip('\0')
-        self.passw = src[14:24].decode('latin-1').strip('\0')
+class CharDelete(Packet):
+    """C1 F3 02"""
+    code = C1, 0xF3, 0x02
+    size = 24
+    fields = (
+        (4, 'name', str10),
+        (14, 'personal_code', str10),
+    )

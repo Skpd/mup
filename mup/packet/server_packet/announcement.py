@@ -1,9 +1,10 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C1, Text, u8
 
 
-class Announcement(Base):
-    def __init__(self, message, message_type=0x00):
-        assert len(message) <= 250
-
-        super().__init__(bytearray([0xC1, 0, 0x0D, message_type, *bytearray(message, 'ascii'), 0]))
-        self.length = len(self)
+class Announcement(Packet):
+    """C1 0D: notice."""
+    code = C1, 0x0D
+    fields = (
+        (3, 'type', u8, 0),
+        (4, 'message', Text()),
+    )

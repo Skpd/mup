@@ -1,19 +1,11 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C1, u8
 
 
-class Rotate(Base):
-    direction = None
-    action = None
-
-    @property
-    def sub(self):
-        return None
-
-    @property
-    def key(self):
-        return self[2], None
-
-    def __init__(self, src):
-        super().__init__(src)
-        self.direction = src[3]
-        self.action = src[4]
+class Rotate(Packet):
+    """C1 18: animation, turning sends 0x66."""
+    code = C1, 0x18
+    size = 5
+    fields = (
+        (3, 'direction', u8),
+        (4, 'action', u8),
+    )

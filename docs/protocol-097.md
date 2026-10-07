@@ -74,7 +74,7 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | S>C | `C1 04 00 01` hello | head `00` is shared with chat: while the client is on the server list screen (state 2) any `00` makes it request the server list | code `0x414960` |
 | C>S | `C1 04 F4 02` server list request | no fields, not xored, sent on hello (and again when the list is refreshed) | code, traffic |
 | S>C | `C2 F4 02` server list | `[5]` count, then **4 bytes per server**: `[+0..1]` server code (`group * 20 + index`), `[+2]` load %, `[+3]` unused. Group 12 has a special name | code `0x411e60` |
-| C>S | `C1 06 F4 03` server info request | `[4..5]` server code | code, traffic |
+| C>S | `C1 06 F4 03` server info request | `[4..5]` server code (little endian) | code `0x4caad0`, traffic |
 | S>C | `C1 16 F4 03` server info | `[4..18]` ip string (15 bytes + 0), `[20..21]` port | code `0x421a28` |
 | S>C | `C1 F4 05` | no fields, sets the client's scene state to 1, meaning not reviewed | code |
 
@@ -97,9 +97,9 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C1 0F` weather | `[3]` high nibble: 0 turns the effect off, 1 turns it on with intensity low nibble * 6, other values are ignored | code (dispatcher) |
 | `C1 10` walk | `[3..4]` cid, `[5]` x `[6]` y, `[7]` direction in the high nibble | code `0x414ea0` |
 | `C2 12` players in view | `[4]` count, then **32 bytes** each: `[+0..1]` cid, `[+2]` x `[+3]` y, `[+4]` class `<< 5 \| 2nd class << 4 \| pose` (pose 2..4 pick a sitting / leaning animation), `[+5..14]` equipment, `[+16]` effects bits 0..3 (poison, ice, damage buff, defense buff) and `[+17]` bit 0 another effect, `[+18..27]` name, `[+28]` target x `[+29]` target y, `[+30]` direction << 4 \| pk level, `[+31]` unused. Names containing `webzen` are skipped | code `0x4164b0` |
-| `C2 13` monsters in view | `[4]` count, then 12 bytes each: `[+0..1]` cid, `[+2]` type, `[+3]` unused, `[+4..5]` effects, `[+6]` x `[+7]` y, `[+8]` target x `[+9]` target y, `[+10]` direction in the high nibble | code `0x416fe0` |
+| `C2 13` monsters in view | `[4]` count, then 12 bytes each: `[+0..1]` cid, `[+2]` type, `[+3]` unused, `[+4..5]` effects (little endian word: bits 0..3 as in players in view, bit 8 the `[+17]` effect), `[+6]` x `[+7]` y, `[+8]` target x `[+9]` target y, `[+10]` direction in the high nibble | code `0x416fe0` |
 | `C1 14` out of view | `[3]` count, then cids from `[4]` | code (dispatcher, asm) |
-| `C1 15` damage | `[3..4]` target cid, `[5..6]` BE: damage in the low 13 bits (max 8191), flags in bits 13..15 of the BE word, i.e. `[5]` bits 5..7: bit 7 blue (critical), bit 6 green (excellent), bit 5 magenta, none: orange, red when the target is you. Damage 0 shows a miss | code `0x4179a0` |
+| `C1 15` damage | `[3..4]` target cid, `[5..6]` BE: damage in the low 13 bits (max 8191), flags in bits 13..15 of the BE word, i.e. `[5]` bits 5..7: bit 7 blue (critical), bit 6 green (excellent), bit 5 magenta, green wins over blue over magenta, none: orange, red when the target is you. Damage 0 shows a miss. When the target is you the client also subtracts the damage from a 2 byte field of its character (`+0x1C`, likely life) | code `0x4179a0` |
 | `C3 16` kill exp | must be encrypted: `[3..4]` killed cid, `[5..6]` exp BE, `[7..8]` damage BE, shown like a damage number | code `0x4199a0` |
 | `C1 17` killed | `[3..4]` cid of the dying object, nothing else is read | code (dispatcher, asm) |
 | `C1 18` animation | `[3..4]` cid, `[5]` direction, `[6]` animation | code `0x417fc0` |
@@ -128,40 +128,18 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C3 1D` area skill hits | `[3]` skill list index, `[4]` x `[5]` y, `[6]` serial, `[7]` count, then target cids. **Has a byte between y and count** that OpenMU's 0.75 layout doesn't | code `0x442610` |
 | `C1 00` chat | name + message, not reviewed yet: send a chat line and check the log | - |
 
-## Differences with mup (current working tree)
+## Differences with mup
 
-Ordered by impact. Nothing in mup was changed for this report.
+The layout differences found in the first review were fixed in roadmap M0 (character info, damage, players in view,
+ping, login tick, weather, server list / info, `F3 30`). Still open:
 
-1. **`F3 03` character info is laid out wrong** (`mup/packet/server_packet/stats.py`). The client wants 42 bytes
-   with money at 36, pk level at 40, ctl code at 41. mup sends OpenMU's `CharacterInformation097`: 52 bytes with AG
-   at 34..37 and money at 40, so the client reads money 0 (the AG fields) and takes pk level and ctl code from the
-   money bytes (with the default 31337 zen: pk level 0x69, ctl 0x7A).
-   The 2019 version (`pack('4B2I9HI2B', ...)`, native alignment) had it right.
-2. **Damage is 13 bits** (`damage.py`): mup clamps at `0x3FFF` and puts the type in bits 6..7 of `[5]`. Damage
-   8192..16383 shows wrong and sets the colour flags. Type 3 sets both blue and green (green wins).
-3. **Players in view entries are 32 bytes** (`meet_player.py`), mup writes 31. Harmless while every packet carries
-   one player, a list would misalign. Effects are at `[+16]` / `[+17]`, mup only ever writes zeros there.
-4. **`C3 1D` area skill hits are not handled**. The client reports what an area skill hit, mup instead
+1. **`C3 1D` area skill hits are not handled**. The client reports what an area skill hit, mup instead
    damages everything within 5 tiles of the target point when the skill is cast (`handler/magic.py`) and logs
-   "NEW head code 29" for each report.
-5. **Ping speeds** (`client_packet/ping.py`): attack and magic speed are 2 bytes each at 8 and 10, mup reads
-   4 bytes at 8 and 12 (logs show `aspd 6553733` = `0x00640085`: attack 133, magic 100).
-6. **Login tick is little endian** (`client_packet/login_request.py`), mup parses it as big endian. Only used for
-   logging.
-7. **Weather `0x29`** sent on join (`handler/game_start.py`) has type 2, which this client ignores.
-8. **Server list comment** in `server_list.py` says OpenMU documents 2 bytes per server for pre season 1
-   clients. This client reads 4, so the code is right and the comment is wrong.
-9. **`F4 03` server code is 2 bytes** (`client_packet/server_info.py` reads only `[4]`). Fine for codes below 256.
-10. **`F3 30` is mapped to the exit handler** (`bin/gs.py`, disconnects). No sender for it was found in this client.
-11. **C3 serial**: mup's counter (`Crypt.encrypt_sequence`) starts at 0 per connection, matching the client after
-    a fresh start. If the client keeps its counter across a reconnect, the first encrypted packet of the new
-    connection (character info) would be treated as unencrypted and dropped. Not seen yet, worth knowing when
-    adding "switch server".
-
-Matches (checked against the client code): join result incl. version and cid, login result codes, character
-list, created, deleted, level up, skill list, chat, notice, walk, monsters in view, out of view, kill exp, killed,
-animation, skill animation, area skill animation, connect server packets, and all client packets mup parses
-(login, char list / create / join, walk, attack, animation, skill, area skill).
+   the reports as unhandled. Roadmap M4.
+2. **C3 serial**: mup's counter (`Crypt.encrypt_sequence`) starts at 0 per connection, matching the client after
+   a fresh start. If the client keeps its counter across a reconnect, the first encrypted packet of the new
+   connection (character info) would be treated as unencrypted and dropped. Not seen yet, worth knowing when
+   adding "switch server".
 
 ## Appendix A: server -> client dispatch map
 

@@ -1,37 +1,22 @@
-from mup.common.helpers import str2b
-from mup.model.player import Player
-from mup.packet.base import Base
-from mup.packet.server_packet.appearance import appearance
+from mup.packet.base import Packet, Entry, C1, Raw, str10, u8, u16
+from mup.packet.server_packet.appearance import equipment
 
 
-class CharList(Base):
-    def __init__(self, chars: list):
-        data = bytearray([0xC1, 0, 0xF3, 0, len(chars)])
+class CharList(Packet):
+    """C1 F3 00: characters of the account."""
+    code = C1, 0xF3, 0x00
+    entry = Entry(count=(4, u8), size=26, fields=(
+        (0, 'slot', u8),
+        (1, 'name', str10),
+        (12, 'level', u16),
+        (14, 'ctl', u8),  # & 0x10 marks the character
+        (15, 'class_type', u8),
+        (16, 'equipment', Raw(10)),
+    ))
 
-        for c in chars:
-            data += self.__build_char(c)
-
-        super().__init__(data)
-        self.length = len(self)
-
-    def __build_char(self, p: Player):
-        data = bytearray([
-            p.index,  # position
-            *str2b(p.name),
-            0x00,  # unk
-            p.level & 0xFF, (p.level >> 8) & 0xFF,  # lvl little endian
-            p.role_code,  # ctl
-            *appearance(p),
-        ])
-
-        return data
-
-    def __to_short_level(self, n):
-        if n in {0, 1, 2}:
-            return 0
-        elif n in {3, 4}:
-            return 1
-        elif n in {5, 6}:
-            return 2
-        else:
-            return n - 4
+    @classmethod
+    def of(cls, players):
+        return cls(entries=[{
+            'slot': p.index, 'name': p.name, 'level': p.level, 'ctl': p.role_code,
+            'class_type': p.class_type.value, 'equipment': equipment(p),
+        } for p in players])

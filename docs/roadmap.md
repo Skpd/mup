@@ -8,7 +8,7 @@ Packet codes are hex, details in `docs/protocol-097.md`. Where a code's meaning 
 
 | milestone | status |
 |---|---|
-| M0 protocol fixes, housekeeping | todo |
+| M0 protocol fixes, housekeeping | done |
 | M1 persistence, character select flow | todo |
 | M2 world: maps, gates, monsters | todo |
 | M3 items | todo |
@@ -33,6 +33,9 @@ Housekeeping:
   DEBUG switch.
 - Decide whether to move packets to declarative definitions (field list -> encode / decode) before the packet count
   grows. Most bugs so far were hand counted offsets and byte order.
+  Decided: yes, all packets converted. `Packet` in `mup/packet/base.py`: fields as (offset, name, type) copied from
+  the doc, types carry the byte order, layouts checked at import (order, overlaps, size). `tests/client.py` keeps
+  checking raw offsets so it catches a wrong definition.
 
 Done when: test checks money / pk level in character info and a damage above 255, real client shows the right zen.
 

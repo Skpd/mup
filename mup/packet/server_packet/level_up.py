@@ -1,11 +1,13 @@
-from mup.common.helpers import short2b
-from mup.packet.base import Base
+from mup.packet.base import Packet, C3, u16
 
 
-class LevelUp(Base):
-    def __init__(self, level, points, max_life, max_mana):
-        super().__init__([
-            0xC3, 0, 0xF3, 0x05,
-            *short2b(level, False), *short2b(points, False),
-            *short2b(max_life, False), *short2b(max_mana, False),
-        ])
+class LevelUp(Packet):
+    """C3 F3 05"""
+    code = C3, 0xF3, 0x05
+    size = 12
+    fields = (
+        (4, 'level', u16),
+        (6, 'points', u16),
+        (8, 'max_life', u16),
+        (10, 'max_mana', u16),
+    )

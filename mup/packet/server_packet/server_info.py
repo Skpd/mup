@@ -1,16 +1,11 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C1, Str, u16
 
 
-class ServerInfo(Base):
-    def __init__(self, server):
-        super().__init__([0xC1, 0, 0xF4, 0x03])
-
-        ip = list(map(ord, server['ip']))
-        pad = [0] * (16-len(server['ip']))
-        for i in ip+pad:
-            self.append(i)
-        self.append(server['port'] & 0xFF)
-        self.append(server['port'] >> 8 & 0xFF)
-
-        self.length = len(self)
-
+class ServerInfo(Packet):
+    """C1 F4 03: game server address."""
+    code = C1, 0xF4, 0x03
+    size = 22
+    fields = (
+        (4, 'ip', Str(16)),  # 15 characters and a 0
+        (20, 'port', u16),
+    )

@@ -1,21 +1,23 @@
+import logging
 from mup.error import NotFoundError
 from mup.packet.client import CJoinGame
 from mup.packet.server import SStats, SInventory, SMeetPlayer, SMeetMonster, SSkillList
 from mup.server.protocol import BaseProtocol
 
+logger = logging.getLogger(__name__)
+
 
 def game_start_handler(msg: CJoinGame, proto: BaseProtocol):
-    print('Game join request for {}'.format(msg.name))
-
     try:
         player = proto.server.player_mapper.load(msg.name)
     except NotFoundError:
         player = None
 
     if player is None or proto.acc is None or player.account.id != proto.acc.id:
-        print('{} is not a character of this account'.format(msg.name))
+        logger.warning('%s is not a character of this account', msg.name)
         return
 
+    logger.info('%s enters the game as %s', proto.acc.name, player.name)
     proto.player = player
     proto.playing = True
 
@@ -31,17 +33,19 @@ announcement    c1:1e:0d:00:57:65:6c:63:6f:6d:65:20:74:6f:20:4d:75:4f:6e:6c:69:6
 meet self       c2:00:25:12:01:92:c8:84:46:00:ff:ff:33:33:3c:0d:b6:c0:00:00:00:00:00:64:75:6d:6d:79:00:00:00:00:00:84:46:02:00:
 qwe binds       c1:13:f3:30:00:05:0b:04:11:00:00:00:00:00:09:00:04:08:0f
 """
-    proto.write(bytearray([0xC1, 0x04, 0x0F, 0x29]))  # weather
+    # no weather packet (0x0F): the 0x29 above is from another version, this client ignores it
 
-    proto.write(SStats(player))
-    proto.write(SInventory(player.inventory))
-    proto.write(SMeetPlayer(proto.cid, player))
-    proto.write(SSkillList(player.skills))
+    proto.write(SStats.of(player))
+    proto.write(SInventory())
+    proto.write(SMeetPlayer.of([(proto.cid, player)]))
+    proto.write(SSkillList.of(player.skills))
 
-    for c in proto.server.get_monsters_within(player.map_id, player.x, player.y):
-        proto.write(SMeetMonster(c))
+    monsters = proto.server.get_monsters_within(player.map_id, player.x, player.y)
+    if monsters:
+        proto.write(SMeetMonster.of(monsters))
 
-    for c in proto.server.get_players_within(player.map_id, player.x, player.y):
-        if c != proto:
-            proto.write(SMeetPlayer(c.cid, c.player))
-            c.write(SMeetPlayer(proto.cid, player))
+    others = [c for c in proto.server.get_players_within(player.map_id, player.x, player.y) if c != proto]
+    if others:
+        proto.write(SMeetPlayer.of([(c.cid, c.player) for c in others]))
+    for c in others:
+        c.write(SMeetPlayer.of([(proto.cid, player)]))

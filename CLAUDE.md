@@ -6,9 +6,14 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 ## Layout
 
 - `bin/cs.py` connect server (port 44405), `bin/gs.py` game server (55901). Run from the repo root, the crypto
-  keys in `data/` are opened with relative paths.
-- `mup/packet/`: `base.py` (`Base(bytearray)`: type, size, head, sub), `client_packet/*` parsers mapped by head / sub
-  in `client.py`, `server_packet/*` builders aliased in `server.py` (`S...` names).
+  keys in `data/` and `config.ini` are opened with relative paths.
+- `config.ini` (or the file in `MU_CONFIG`), read by `mup/config.py`: ports, advertised GS host, exp / drop rates,
+  log level, packet logging.
+- `mup/packet/`: `base.py` has `Base(bytearray)` (type, size, head, sub) and the declarative `Packet`: `code`, `size`,
+  `fields` as `(offset, name, type[, default])`, `entry` for lists. Field types carry the byte order (`u16` LE,
+  `u16be`, `cid` BE). `Packet(name=value)` builds, `Packet(data)` parses into attributes; list packets have an
+  `of(...)` builder from models. `client_packet/*` mapped by their `code` in `client.py`, `server_packet/*` aliased
+  in `server.py` (`S...` names).
 - `mup/server/`: `protocol.py` (framing, crypto, dispatch to handlers), `game.py` (`GameServer`: connections by cid,
   distance based visibility, monster respawn), `connect.py`, `combat.py`, `handler/*` (one per packet, registered
   in `bin/gs.py` / `bin/cs.py`).
@@ -25,13 +30,15 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 - Client: `~/projects/client/mu/main.exe`, patched to connect to `mu.skpd.dev:44405` (resolves to 127.0.0.1) and
   serial `muonlineonpython`. `main.exe.orig` is the original. The other folders in `~/projects/client` are other
   versions with other protocols.
-- Servers log every packet in and out at DEBUG. For problems in the real client, ask the user for the server log.
+- Servers log at INFO. `log_packets = yes` in `config.ini` logs every packet in and out, tagged with the cid. For
+  problems in the real client, ask the user to turn it on and paste the server log.
 
 ## Testing
 
-- `./venv/bin/python tests/client.py`: starts its own CS and GS (ports must be free), plays two clients through
-  login, character creation, walking, chat, combat, magic, disconnect and relog. Run it after every change and
-  extend it with every feature.
+- `./venv/bin/python tests/client.py`: starts its own CS and GS with a test config (ports 44415 / 55911, packet
+  logging on), plays two clients through login, character creation, walking, chat, combat, magic, disconnect and
+  relog. Run it after every change and extend it with every feature. It checks raw offsets from the doc, never the
+  packet definitions, so a wrong definition fails it.
 - The real client is the final check: ask the user to try it and paste the log.
 
 ## Protocol rules
@@ -62,5 +69,7 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 
 - Follow the existing style: one packet class per packet, one small handler per packet, game logic in `mup/server`
   modules rather than in handlers.
+- Packet fields are copied from the doc table with their offsets; a layout mistake (overlap, past the size) fails
+  at import. Logging: `logging.getLogger(__name__)`, no `print`.
 - Storage is in memory until roadmap M1 (SQLite).
 - Commit only when asked.

@@ -1,12 +1,16 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C3, cid, u8, u16be
 
 
-class Magic(Base):
-    def __init__(self, magic_id, success, target_cid, owner_cid=0):
-        target_cid &= 0x7FFF
+class Magic(Packet):
+    """C3 19: skill animation on a target, must be encrypted."""
+    code = C3, 0x19
+    size = 8
+    fields = (
+        (3, 'skill', u8),  # skill number, not the list index
+        (4, 'caster', cid),
+        (6, 'target', u16be),  # cid, bit 15: the effect applied
+    )
 
-        if success:
-            target_cid |= 0x8000
-
-        data = [0xC3, 8, 0x19, magic_id, owner_cid >> 8, owner_cid & 0xFF, target_cid >> 8, target_cid & 0xFF]
-        super().__init__(data)
+    @classmethod
+    def of(cls, skill, caster, target, hit):
+        return cls(skill=skill, caster=caster, target=target & 0x7FFF | (0x8000 if hit else 0))

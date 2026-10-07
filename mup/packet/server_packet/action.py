@@ -1,12 +1,13 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C1, cid, u8
 
 
-class Action(Base):
-    """Object animation: rotation, emotes, attacks."""
-    def __init__(self, cid, direction, action, target_cid=0):
-        super().__init__(bytearray([
-            0xC1, 0x09, 0x18,
-            cid >> 8, cid & 0xFF,
-            direction, action,
-            target_cid >> 8, target_cid & 0xFF,
-        ]))
+class Action(Packet):
+    """C1 18: object animation: rotation, emotes, attacks."""
+    code = C1, 0x18
+    size = 9
+    fields = (
+        (3, 'cid', cid),
+        (5, 'direction', u8),
+        (6, 'action', u8),
+        (7, 'target', cid, 0),
+    )

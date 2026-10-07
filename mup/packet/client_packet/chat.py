@@ -1,16 +1,10 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C1, Text, str10
 
 
-class Chat(Base):
-    message = None
-    name = None
-
-    @property
-    def key(self):
-        return self[2], None
-
-    def __init__(self, src):
-        super().__init__(src)
-
-        self.name = src[3:13].decode('latin-1').strip('\0')
-        self.message = src[13:].decode('latin-1').strip('\0')
+class Chat(Packet):
+    """C1 00: layout not reviewed in the client yet."""
+    code = C1, 0x00
+    fields = (
+        (3, 'name', str10),
+        (13, 'message', Text()),
+    )

@@ -1,8 +1,11 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C1, cid
 
 
-class Kill(Base):
-    def __init__(self, dead_cid, killer_cid):
-        super().__init__(bytearray([
-            0xC1, 0x08, 0x17, dead_cid >> 8, dead_cid & 0xff, 0, killer_cid >> 8, killer_cid & 0xff
-        ]))
+class Kill(Packet):
+    """C1 17: object died. The client only reads the dying object's cid."""
+    code = C1, 0x17
+    size = 8
+    fields = (
+        (3, 'cid', cid),
+        (6, 'killer', cid),
+    )

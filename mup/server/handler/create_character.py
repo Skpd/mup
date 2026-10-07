@@ -1,15 +1,16 @@
+import logging
 from mup.error import NotFoundError
 from mup.model.player import Player, CharacterClass, DEFAULT_SKILLS
 from mup.packet.client_packet.char_create import CharCreate
 from mup.packet.server import SCharCreated
 from mup.server.protocol import BaseProtocol
 
+logger = logging.getLogger(__name__)
+
 MAX_CHARACTERS = 5
 
 
 def create_character_handler(msg: CharCreate, proto: BaseProtocol):
-    print('char create request {} class {}'.format(msg.name, msg.class_type))
-
     if proto.acc is None:
         return
 
@@ -28,7 +29,8 @@ def create_character_handler(msg: CharCreate, proto: BaseProtocol):
         name_taken = False
 
     if not msg.name or class_type is None or name_taken or not free:
-        proto.write(SCharCreated())
+        logger.info('%s can\'t create %s, class %s', proto.acc.name, msg.name, msg.class_type)
+        proto.write(SCharCreated(result=0))
         return
 
     p = Player(
@@ -39,4 +41,5 @@ def create_character_handler(msg: CharCreate, proto: BaseProtocol):
         account=proto.acc,
     )
     players.store(p)
-    proto.write(SCharCreated(p))
+    logger.info('%s created %s, class %s', proto.acc.name, p.name, class_type.name)
+    proto.write(SCharCreated(result=1, name=p.name, slot=p.index))

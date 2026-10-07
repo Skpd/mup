@@ -1,15 +1,11 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C3, cid, u8
 
 
-class MagicAttack(Base):
-    skill_index: int  # position in the skill list sent on join, not the skill number
-    target_cid: int
-
-    @property
-    def key(self):
-        return self[2], None
-
-    def __init__(self, src):
-        super().__init__(src)
-        self.skill_index = self[3]
-        self.target_cid = self[4] << 8 | self[5]
+class MagicAttack(Packet):
+    """C3 19: skill on a target."""
+    code = C3, 0x19
+    size = 6
+    fields = (
+        (3, 'skill_index', u8),  # position in the skill list sent on join, not the skill number
+        (4, 'target_cid', cid),
+    )

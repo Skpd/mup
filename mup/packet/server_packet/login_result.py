@@ -1,7 +1,14 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C1, u8
 
 
-class LoginResult(Base):
+class LoginResult(Packet):
+    """C1 F1 01"""
+    code = C1, 0xF1, 0x01
+    size = 5
+    fields = (
+        (4, 'result', u8),
+    )
+
     BAD_PASSWORD = 0x00
     SUCCESS = 0x01
     IN_USE = 0x03
@@ -16,9 +23,3 @@ class LoginResult(Base):
     SUBSCRIPTION_IS_OVER_IP = 0x0C
     INVALID_ACCOUNT = 0x0D
     CONNECTION_ERROR2 = 0x0E
-
-    def __init__(self, result):
-        data = [0xC1, 0, 0xF1, 0x01, result]
-
-        super().__init__(data)
-        self.length = len(self)

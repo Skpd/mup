@@ -1,12 +1,16 @@
+import logging
 from datetime import datetime
 from itertools import count
 from random import randint, choice
 from mup.common.interval import Interval
+from mup.config import Config
 from mup.mapper.memory import MemoryAccountMapper, MemoryPlayerMapper
 from mup.model.monster import Monster
 from mup.model.player import Player
 from mup.packet.server import SServerJoin, SMeetMonster, SClear
 from mup.server.base import ServerBase
+
+logger = logging.getLogger(__name__)
 
 
 class GameServer(ServerBase):
@@ -14,9 +18,10 @@ class GameServer(ServerBase):
     viewport_bit = 4  # bit length of viewport width - 1
     first_player_cid = 4800  # monsters take the lower ids
 
-    def __init__(self, loop):
+    def __init__(self, loop, config: Config):
         super().__init__()
         self.loop = loop
+        self.config = config
         self.cids = count(self.first_player_cid)
 
         # todo persistent storage, mongo mappers are in mup.mapper.account / mup.mapper.player
@@ -58,7 +63,7 @@ class GameServer(ServerBase):
 
             self.connections[mob.cid] = mob
             # self.viewports[0][vp_key][mob.cid] = mob
-            print('Added Mob #{}:#{} to {} with xy {}:{}'.format(mob.type_id, mob.cid, vp_key, mob.x, mob.y))
+            logger.debug('Added Mob #%s:#%s to %s with xy %s:%s', mob.type_id, mob.cid, vp_key, mob.x, mob.y)
 
         # mover init
         self.monster_mover = Interval(self.monster_move, 1)
@@ -74,7 +79,7 @@ class GameServer(ServerBase):
             if isinstance(m, Monster) and m.dead and (m.died_at + m.respawn_interval) <= now:
                 # players near the corpse may still have it
                 for c in self.get_players_within(m.map_id, m.x, m.y):
-                    c.write(SClear(m.cid))
+                    c.write(SClear.of([m.cid]))
 
                 m.life = m.max_life
                 m.x = choice(m.spawn_area[0])
@@ -82,7 +87,7 @@ class GameServer(ServerBase):
                 m.dead = False
 
                 for c in self.get_players_within(m.map_id, m.x, m.y):
-                    c.write(SMeetMonster(m))
+                    c.write(SMeetMonster.of([m]))
 
     def monster_move(self):
         for _, m in self.connections.items():
@@ -119,13 +124,12 @@ class GameServer(ServerBase):
 
         self.player_mapper.store(p)
         for other in self.get_players_within(p.map_id, p.x, p.y):
-            other.write(SClear(c.cid))
+            other.write(SClear.of([c.cid]))
 
     def add_connection(self, c):
         c.cid = next(self.cids)
         self.connections[c.cid] = c
-        print('added connection', c)
-        c.write(SServerJoin(c.cid))
+        c.write(SServerJoin(cid=c.cid))
 
     def get_player_connection(self, c):
         if c in self.connections:

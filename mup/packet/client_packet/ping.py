@@ -1,14 +1,12 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C3, u16, u32
 
 
-class Ping(Base):
-    tick = None
-    pAttackSpeed = None
-    mAttackSpeed = None
-
-    def __init__(self, src):
-        super().__init__(src)
-
-        self.tick = int().from_bytes(src[4:8], 'little')
-        self.pAttackSpeed = int().from_bytes(src[8:12], 'little')
-        self.mAttackSpeed = int().from_bytes(src[12:16], 'little')
+class Ping(Packet):
+    """C3 0E 00"""
+    code = C3, 0x0E, 0x00
+    size = 12
+    fields = (
+        (4, 'tick', u32),  # GetTickCount
+        (8, 'attack_speed', u16),
+        (10, 'magic_speed', u16),
+    )

@@ -1,6 +1,13 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C1, cid, u8
 
 
-class Move(Base):
-    def __init__(self, cid, x, y, direction):
-        super().__init__(bytearray([0xC1, 0x08, 0x10, cid >> 8, cid & 0xFF, x, y, direction]))
+class Move(Packet):
+    """C1 10: object walks to x, y."""
+    code = C1, 0x10
+    size = 8
+    fields = (
+        (3, 'cid', cid),
+        (5, 'x', u8),
+        (6, 'y', u8),
+        (7, 'direction', u8),  # direction << 4
+    )

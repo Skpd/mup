@@ -7,9 +7,9 @@ from mup.model.player import Player
 # item levels, 3 bytes: rh | lh << 3 | h << 3 | a << 3 | p << 3 | g << 3 | b << 3
 # item overflow flag, 1 bit each: h a p g b, 0xF8 - none of them is set
 # excl flag, 1bit each
-EMPTY_EQUIPMENT = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xF8, 0x00]
+EMPTY_EQUIPMENT = bytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xF8, 0x00])
 
 
-def appearance(p: Player):
-    """Class and equipment as shown in character list and to other players, 11 bytes."""
-    return bytearray([p.class_type.value, *EMPTY_EQUIPMENT])
+def equipment(p: Player):
+    """Equipment as shown in character list and to other players, 10 bytes."""
+    return EMPTY_EQUIPMENT

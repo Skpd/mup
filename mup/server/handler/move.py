@@ -1,10 +1,13 @@
+import logging
 from mup.packet.client import CMove
 from mup.packet.server import SClear, SMeetMonster, SMove, SMeetPlayer
 from mup.server.protocol import BaseProtocol
 
+logger = logging.getLogger(__name__)
+
 
 def move_handler(msg: CMove, proto: BaseProtocol):
-    print('Move from {} {} to {} {}. Path: {}'.format(msg.x, msg.y, msg.target_x, msg.target_y, msg.path.hex()))
+    logger.debug('Move from %s %s to %s %s. Path: %s', msg.x, msg.y, msg.target_x, msg.target_y, msg.path.hex())
 
     # todo check move available and legit
 
@@ -26,20 +29,20 @@ def move_handler(msg: CMove, proto: BaseProtocol):
     new_players.discard(proto)
 
     for c in old_players - new_players:
-        c.write(SClear(proto.cid))
-        proto.write(SClear(c.cid))
+        c.write(SClear.of([proto.cid]))
+        proto.write(SClear.of([c.cid]))
 
     for c in new_players - old_players:
-        c.write(SMeetPlayer(proto.cid, p))
-        proto.write(SMeetPlayer(c.cid, c.player))
+        c.write(SMeetPlayer.of([(proto.cid, p)]))
+        proto.write(SMeetPlayer.of([(c.cid, c.player)]))
 
     for m in old_monsters - new_monsters:
-        proto.write(SClear(m.cid))
+        proto.write(SClear.of([m.cid]))
 
     for m in new_monsters - old_monsters:
-        proto.write(SMeetMonster(m))
+        proto.write(SMeetMonster.of([m]))
 
     # the mover walks on its own, others only need the target
-    move = SMove(proto.cid, p.x, p.y, p.direction << 4)
+    move = SMove(cid=proto.cid, x=p.x, y=p.y, direction=p.direction << 4)
     for c in old_players & new_players:
         c.write(move)

@@ -1,19 +1,13 @@
-from mup.packet.base import Base
+from mup.packet.base import Packet, C3, u8
 
 
-class MagicAOE(Base):
-    skill_index: int  # position in the skill list sent on join, not the skill number
-    x: int
-    y: int
-    direction: int
-
-    @property
-    def key(self):
-        return self[2], None
-
-    def __init__(self, src):
-        super().__init__(src)
-        self.skill_index = self[3]
-        self.x = self[4]
-        self.y = self[5]
-        self.direction = self[6]
+class MagicAOE(Packet):
+    """C3 1E: area skill."""
+    code = C3, 0x1E
+    size = 7
+    fields = (
+        (3, 'skill_index', u8),  # position in the skill list sent on join, not the skill number
+        (4, 'x', u8),
+        (5, 'y', u8),
+        (6, 'direction', u8),
+    )
