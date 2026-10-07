@@ -16,5 +16,5 @@ class ServerBase:
         self.connections[c] = c
 
     def disconnect(self, c):
-        del self.connections[c]
+        self.connections.pop(c, None)
 

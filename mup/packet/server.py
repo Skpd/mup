@@ -20,6 +20,8 @@ from mup.packet.server_packet.exp import Exp as Exp097
 from mup.packet.server_packet.effect import Effect as Effect097
 from mup.packet.server_packet.level_up import LevelUp as LevelUp097
 from mup.packet.server_packet.magic import Magic as Magic097
+from mup.packet.server_packet.skill_list import SkillList as SkillList097
+from mup.packet.server_packet.action import Action as Action097
 
 
 SServerList = ServerList097
@@ -44,6 +46,8 @@ SExp = Exp097
 SEffect = Effect097
 SLevelUp = LevelUp097
 SMagic = Magic097
+SSkillList = SkillList097
+SAction = Action097
 
 
 head_code_map = {
@@ -59,6 +63,7 @@ head_code_map = {
     0x15: SDamage,
     0x16: SExp,  # C3?
     0x17: SKill,
+    0x18: SAction,
     0x19: SMagic,
     #  0x20 - Items
     #  0x65 - Guild info
@@ -82,7 +87,7 @@ head_code_map = {
         #  0x07 - damage
         #  0x08 - PK level
         0x10: SInventory,
-        #  0x11 - Magic List (multiple)
+        0x11: SSkillList,
         #  0x13 - Equipment (set) send
         #  0x14 - Inventory one item (pos, info)
         #  0x20 - Summoned monster life

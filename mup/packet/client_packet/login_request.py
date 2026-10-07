@@ -10,10 +10,8 @@ class LoginRequest(Base):
     def __init__(self, src):
         super().__init__(src)
 
-        self.login = self[4:14].strip(b'\0').decode('ascii')
-        self.passw = self[14:34].strip(b'\0').decode('ascii')  # gmo - 20, rest - 10
-        self.tick = int.from_bytes(self[34:38], byteorder='little', signed=False)
-        self.version = self[38:43]
-        self.serial = self[43:]
-
-
+        self.login = self[4:14].strip(b'\0').decode('latin-1')
+        self.passw = self[14:24].strip(b'\0').decode('latin-1')  # 0.97 - 10, gmo - 20
+        self.tick = int.from_bytes(self[24:28], byteorder='big', signed=False)
+        self.version = self[28:33]
+        self.serial = self[33:49]

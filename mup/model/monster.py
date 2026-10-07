@@ -31,6 +31,7 @@ class Monster:
 
     def __init__(self, cid, type_id):
         self.state = 0
+        self.map_id = 0
         self.x = 0
         self.y = 0
         self.cid = cid

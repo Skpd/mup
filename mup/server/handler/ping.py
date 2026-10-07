@@ -16,7 +16,5 @@ def ping_handler(msg: CPing, proto: BaseProtocol):
         ping = client_diff - server_diff
         print('Serve tick diff: {}, client tick diff {}, ping: {}'.format(server_diff, client_diff, ping))
 
-    proto.write(bytearray([0xC3, 4, 0xE0, 0x99]))
-
     proto.server_tick = next_server_tick
     proto.client_tick = next_client_tick

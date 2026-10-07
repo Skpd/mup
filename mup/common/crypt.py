@@ -1,7 +1,6 @@
 import struct
 from mup.common.timer import Timer
 from mup.packet.base import Base
-from mup.packet.server_packet.char_list import CharList
 
 
 class Crypt:
@@ -84,7 +83,7 @@ class Crypt:
             # todo move out
             if res.head == 0xF1 and res.sub in {1, 0}:
                 self.decrypt_login(res, 4, 10)
-                self.decrypt_login(res, 14, 20)
+                self.decrypt_login(res, 14, 10)  # 0.97 password is 10 bytes (gmo - 20)
 
         return res
 

@@ -1,38 +1,38 @@
 from datetime import datetime
+from itertools import count
 from random import randint, choice
 from mup.common.interval import Interval
-from mup.mapper.account import AccountMapper
-from mup.mapper.player import PlayerMapper
+from mup.mapper.memory import MemoryAccountMapper, MemoryPlayerMapper
 from mup.model.monster import Monster
 from mup.model.player import Player
-from mup.packet.server import SServerJoin, SMeetMonster
+from mup.packet.server import SServerJoin, SMeetMonster, SClear
 from mup.server.base import ServerBase
 
 
 class GameServer(ServerBase):
     viewport_width = 16
     viewport_bit = 4  # bit length of viewport width - 1
+    first_player_cid = 4800  # monsters take the lower ids
 
     def __init__(self, loop):
         super().__init__()
         self.loop = loop
+        self.cids = count(self.first_player_cid)
 
-        self.player_mapper = PlayerMapper()
-        self.account_mapper = AccountMapper()
-
-        # VP init
-        self.viewports = {map_id: {} for map_id in range(16)}
-        for map_id in range(16):
-            for x in range(0, 255, self.viewport_width):
-                for y in range(0, 255, self.viewport_width):
-                    self.viewports[map_id][(x, y, x + self.viewport_width, y + self.viewport_width)] = {}
-
+        # todo persistent storage, mongo mappers are in mup.mapper.account / mup.mapper.player
+        self.player_mapper = MemoryPlayerMapper()
+        self.account_mapper = MemoryAccountMapper()
 
         mob = Monster(0x0f, 6)
         mob.x = 127
         mob.y = 189
+        mob.spawn_area = (range(124, 132), range(186, 194))
         mob.dead = False
         self.connections[mob.cid] = mob
+
+        # respawn init
+        self.monster_spawner = Interval(self.monster_spawn, 1)
+        self.monster_spawner.start()
         return
 
         # spawn
@@ -72,12 +72,16 @@ class GameServer(ServerBase):
         now = int(datetime.utcnow().timestamp())
         for _, m in self.connections.items():
             if isinstance(m, Monster) and m.dead and (m.died_at + m.respawn_interval) <= now:
+                # players near the corpse may still have it
+                for c in self.get_players_within(m.map_id, m.x, m.y):
+                    c.write(SClear(m.cid))
+
                 m.life = m.max_life
                 m.x = choice(m.spawn_area[0])
                 m.y = choice(m.spawn_area[1])
                 m.dead = False
 
-                for c in self.get_players_within(m.x, m.y):
+                for c in self.get_players_within(m.map_id, m.x, m.y):
                     c.write(SMeetMonster(m))
 
     def monster_move(self):
@@ -87,63 +91,41 @@ class GameServer(ServerBase):
                     # print('calling ', m.move_strategy, m, self)
                     m.move_strategy(m, self)
 
-    def get_players_within(self, x, y, distance=16):
-        return self.get_all_within_distance(x, y, distance=distance, class_match=Player)
+    def get_players_within(self, map_id, x, y, distance=16):
+        return self.get_all_within_distance(map_id, x, y, distance=distance, class_match=Player)
 
-    def get_monsters_within(self, x, y, distance=16):
-        return self.get_all_within_distance(x, y, distance=distance, class_match=Monster)
+    def get_monsters_within(self, map_id, x, y, distance=16):
+        return self.get_all_within_distance(map_id, x, y, distance=distance, class_match=Monster)
 
-    def get_all_within_distance(self, x, y, distance=16, class_match=None):
+    def get_all_within_distance(self, map_id, x, y, distance=16, class_match=None):
         result = []
         for _, c in self.connections.items():
-            if isinstance(c, Monster) and not c.dead:
+            if isinstance(c, Monster) and not c.dead and c.map_id == map_id:
                 if class_match is None or class_match == Monster:
                     if abs(c.x - x) <= distance and abs(c.y - y) <= distance:
                         result.append(c)
-            if hasattr(c, 'player') and c.player is not None:
+            if getattr(c, 'player', None) is not None and c.player.map_id == map_id:
                 if class_match is None or class_match == Player:
                     if abs(c.player.x - x) <= distance and abs(c.player.y - y) <= distance:
                         result.append(c)
         return result
 
-    def get_my_viewport(self, map_id, x, y):
-        vpx = x >> self.viewport_bit << self.viewport_bit
-        vpy = y >> self.viewport_bit << self.viewport_bit
-        return self.viewports[map_id][(vpx, vpy, vpx + self.viewport_width, vpy + self.viewport_width)]
-
-    # vp vp vp
-    # vp xy vp
-    # vp vp vp
-    def get_adjacent_viewports(self, map_id, x, y):
-        vpx = x >> self.viewport_bit << self.viewport_bit
-        vpy = y >> self.viewport_bit << self.viewport_bit
-        w = self.viewport_width
-
-        cells = []
-        for my in [-1, 0, 1]:
-            for mx in [-1, 0, 1]:
-                k = (
-                    vpx + w*mx, vpy + w*my,
-                    vpx + w + w*mx, vpy + w + w*my
-                )
-                cell = self.viewports[map_id][k] if all([x >= 0 for x in k]) else {}
-                cells.append(cell)
-
-        return cells
-
     def disconnect(self, c):
+        self.connections.pop(c.cid, None)
+
         p = c.player
+        if p is None:
+            return
+
         self.player_mapper.store(p)
-        del self.get_my_viewport(p.map_id, p.x, p.y)[c.cid]
-        del self.connections[c.cid]
+        for other in self.get_players_within(p.map_id, p.x, p.y):
+            other.write(SClear(c.cid))
 
     def add_connection(self, c):
-        # todo
-        c.cid = 123
-        # c.cid = len(self.connections)
+        c.cid = next(self.cids)
         self.connections[c.cid] = c
         print('added connection', c)
-        c.write(SServerJoin())
+        c.write(SServerJoin(c.cid))
 
     def get_player_connection(self, c):
         if c in self.connections:

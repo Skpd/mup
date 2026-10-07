@@ -1,46 +1,27 @@
+from mup.common.helpers import str2b
 from mup.model.player import Player
 from mup.packet.base import Base
+from mup.packet.server_packet.appearance import appearance
 
 
 class CharList(Base):
     def __init__(self, chars: list):
-        data = bytearray([
-            0xC3, 0, 0xF3, 0,
-            5,  # max class - dk, dw, els, mg, dl
-            0,  # unk / move ?
-            len(chars)  # count
-        ])
+        data = bytearray([0xC1, 0, 0xF3, 0, len(chars)])
 
-        for i, c in enumerate(chars):
-            data += self.__build_char(i, c)
-
-        # item, empty - max
-        # rh - 0-7 << 5 | 0-31
-        # lh - 0-7 << 5 | 0-31
-        # h - 0-15 << 4 | a - 0-15
-        # p - 0-15 << 4 | g - 0-15
-        # b - 0-15 << 4 | w - 0-3 << 2 | pet - 0-3
-        # short lvl, empty - 0
-        # rh | lh << 3 | h << 3 | a << 3 | p << 3 | g << 3 | b << 3 - 3ch
-        # item overflow flag, 1bit each, items, rh lh, ?
-        # excl flag, 1bit each, items, rh lh, ?
-        # | 1 2 3 4 5 6 7 8 |
-        #
+        for c in chars:
+            data += self.__build_char(c)
 
         super().__init__(data)
         self.length = len(self)
 
-    def __build_char(self, index, p: Player):
+    def __build_char(self, p: Player):
         data = bytearray([
-            index,  # position
-            *bytearray(p.name.encode('ascii')).ljust(10, b'\0'),
+            p.index,  # position
+            *str2b(p.name),
             0x00,  # unk
-            p.level & 0xFF,  # lvl low
-            (p.level >> 8) & 0xFF,  # lvl hi
-            0x00,  # ctl,
-            p.class_type.value,  # class
-            *[0x00] * 17,  # inventory
-            0x00  # guild status 0x00, 0x20, 0x40, 0x80
+            p.level & 0xFF, (p.level >> 8) & 0xFF,  # lvl little endian
+            p.role_code,  # ctl
+            *appearance(p),
         ])
 
         return data

@@ -11,3 +11,8 @@ def short2b(short, little_endian=True):
         return (short >> 8) & 0xff, short & 0xff
     else:
         return short & 0xff, (short >> 8) & 0xff
+
+
+def str2b(s, size=10):
+    """Fixed size zero padded string field, like names and account ids."""
+    return bytearray(s.encode('latin-1')[:size]).ljust(size, b'\0')

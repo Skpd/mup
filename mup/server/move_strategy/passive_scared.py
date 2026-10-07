@@ -11,7 +11,7 @@ def move(me: Monster, server: GameServer):
     # todo closest? all?
     anyone_near = False
     near_distance = []
-    currently_nearby = set(server.get_players_within(*cur_pos, distance=5))
+    currently_nearby = set(server.get_players_within(me.map_id, *cur_pos, distance=5))
     for c in currently_nearby:
         if isinstance(c, BaseProtocol):
             anyone_near = True
@@ -26,7 +26,7 @@ def move(me: Monster, server: GameServer):
         choices = near_distance
 
     new_pos = (max(0, me.x + random.choice(choices[0])), max(0, me.y + random.choice(choices[2])))
-    new_nearby = set(server.get_players_within(*new_pos, distance=5))
+    new_nearby = set(server.get_players_within(me.map_id, *new_pos, distance=5))
 
     for c in (currently_nearby | new_nearby):
         c.write(SMove(me.cid, *new_pos, 0))
@@ -35,7 +35,7 @@ def move(me: Monster, server: GameServer):
         c.write(SMeetMonster(me, *new_pos))
 
     for c in currently_nearby - new_nearby:
-        c.write(SClear(me))
+        c.write(SClear(me.cid))
 
     me.x = new_pos[0]
     me.y = new_pos[1]

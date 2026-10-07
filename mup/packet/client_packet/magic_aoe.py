@@ -2,7 +2,7 @@ from mup.packet.base import Base
 
 
 class MagicAOE(Base):
-    magic_id: int
+    skill_index: int  # position in the skill list sent on join, not the skill number
     x: int
     y: int
     direction: int
@@ -13,12 +13,7 @@ class MagicAOE(Base):
 
     def __init__(self, src):
         super().__init__(src)
-        self.magic_id = self[3]
-        # self.target_cid = self[4] << 8 | self[5]
+        self.skill_index = self[3]
         self.x = self[4]
         self.y = self[5]
         self.direction = self[6]
-
-        # self.distance = self[6]
-        # self.x = self[7]
-        # self.y = self[8]

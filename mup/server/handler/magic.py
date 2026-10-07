@@ -1,47 +1,50 @@
+from mup.model.monster import Monster
 from mup.packet.base import Base
 from mup.packet.client import CMagicAttack, CMagicAOE
-from mup.packet.server import SDamage, SMagic
+from mup.packet.server import SMagic
+from mup.server.combat import hit_monster
 from mup.server.protocol import BaseProtocol
 
 
 def magic_attack_handler(msg: CMagicAttack, proto: BaseProtocol):
-    print('*** magic #{} from {} to {}'.format(msg.magic_id, proto.cid, msg.target_cid))
-
     p = proto.player
+    if p is None:
+        return
 
-    ok = True
-    dmg = 15
-    dmg_type = 1
+    skill = p.skill(msg.skill_index)
+    print('*** magic #{} (list index {}) from {} to {}'.format(skill, msg.skill_index, proto.cid, msg.target_cid))
 
-    proto.write(SDamage(msg.target_cid, dmg, dmg_type))
-    proto.write(SMagic(msg.magic_id, ok, msg.target_cid))
+    if skill is None:
+        return
 
-    for c in proto.server.get_players_within(p.x, p.y):
-        if c != proto:
-            c.write(SDamage(msg.target_cid, dmg, dmg_type))
-            c.write(SMagic(msg.magic_id, ok, msg.target_cid, proto.cid))
+    # todo pvp
+    target = proto.server.connections.get(msg.target_cid)
+    ok = isinstance(target, Monster) and not target.dead
+
+    # everyone near gets the animation, the caster too
+    animation = SMagic(skill, ok, msg.target_cid, proto.cid)
+    for c in proto.server.get_players_within(p.map_id, p.x, p.y):
+        c.write(animation)
+
+    if ok:
+        hit_monster(proto, target, 15, 1)
 
 
 def aoe_magic_handler(msg: CMagicAOE, proto: BaseProtocol):
-    print('*** AOE magic #{} from {} at {}:{}'.format(msg.magic_id, proto.cid, msg.x, msg.y))
-
     p = proto.player
+    if p is None:
+        return
 
-    ok = True
-    dmg = 20
-    dmg_type = 0
+    skill = p.skill(msg.skill_index)
+    print('*** AOE magic #{} (list index {}) from {} at {}:{}'.format(skill, msg.skill_index, proto.cid, msg.x, msg.y))
 
-    dmg_messages = []
+    if skill is None:
+        return
 
-    for m in proto.server.get_monsters_within(msg.x, msg.y, distance=5):
-        if ok:
-            dmg_messages.append(SDamage(m.cid, dmg, dmg_type))
+    animation = Base(bytearray([0xC3, 0x00, 0x1E, skill, proto.cid >> 8, proto.cid & 0xff, msg.x, msg.y, msg.direction]))
+    for c in proto.server.get_players_within(p.map_id, p.x, p.y):
+        c.write(animation)
 
-    for c in proto.server.get_players_within(p.x, p.y):
-        if c != proto:
-            c.write(Base(bytearray([0xC3, 0x00, 0x1E, msg.magic_id + 1, proto.cid >> 8, proto.cid & 0xff, msg.x, msg.y, msg.direction])))
-        else:
-            c.write(Base(bytearray([0xC3, 0x00, 0x1E, msg.magic_id + 1, 0, 0, msg.x, msg.y, msg.direction])))
-
-        for dmg_msg in dmg_messages:
-            c.write(dmg_msg)
+    # todo the client reports what the skill hit with 0x1D, until then hit everything around the target point
+    for m in proto.server.get_monsters_within(p.map_id, msg.x, msg.y, distance=5):
+        hit_monster(proto, m, 20, 0)

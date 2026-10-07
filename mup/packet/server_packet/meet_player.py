@@ -1,5 +1,7 @@
+from mup.common.helpers import str2b
 from mup.model.player import Player
 from mup.packet.base import Base
+from mup.packet.server_packet.appearance import appearance
 
 
 class MeetPlayer(Base):
@@ -10,15 +12,12 @@ class MeetPlayer(Base):
         data += bytearray([
             cid >> 8, cid & 0xFF,
             p.x, p.y,
-            p.class_type.value,  # class
-            *[0x00] * 23,
-            *bytearray(p.name.encode('ascii')).ljust(10, b'\0'),  # name
+            *appearance(p), 0, 0,
+            0,  # effects: poisoned, iced, damage buff, defense buff
+            *str2b(p.name),
             p.x, p.y,  # tx ty
-            0,  # path
-            0, 0, 0  # unk
+            p.direction << 4 | p.pk  # direction << 4 | pk status
         ])
-
-        data += bytearray([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
         super().__init__(data)
         self.length = len(self)

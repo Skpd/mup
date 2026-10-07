@@ -1,22 +1,23 @@
-from time import sleep
-
-from mup.model.monster import Monster
-from mup.model.player import Player
-from mup.packet.base import Base
+from mup.error import NotFoundError
 from mup.packet.client import CJoinGame
-from mup.packet.server import SStats, SInventory, SMeetPlayer, SMeetMonster, SAnnouncement, SClear
+from mup.packet.server import SStats, SInventory, SMeetPlayer, SMeetMonster, SSkillList
 from mup.server.protocol import BaseProtocol
 
 
 def game_start_handler(msg: CJoinGame, proto: BaseProtocol):
     print('Game join request for {}'.format(msg.name))
+
+    try:
+        player = proto.server.player_mapper.load(msg.name)
+    except NotFoundError:
+        player = None
+
+    if player is None or proto.acc is None or player.account.id != proto.acc.id:
+        print('{} is not a character of this account'.format(msg.name))
+        return
+
+    proto.player = player
     proto.playing = True
-
-    # todo load actual data
-    proto.player = Player()
-    proto.player.name = str(msg.name)
-
-    # proto.server.get_my_viewport(proto.player.map_id, proto.player.x, proto.player.y)[proto.cid] = proto
 
     """
 hp              c1:07:26:fe:00:8f:00
@@ -30,43 +31,17 @@ announcement    c1:1e:0d:00:57:65:6c:63:6f:6d:65:20:74:6f:20:4d:75:4f:6e:6c:69:6
 meet self       c2:00:25:12:01:92:c8:84:46:00:ff:ff:33:33:3c:0d:b6:c0:00:00:00:00:00:64:75:6d:6d:79:00:00:00:00:00:84:46:02:00:
 qwe binds       c1:13:f3:30:00:05:0b:04:11:00:00:00:00:00:09:00:04:08:0f
 """
-    proto.write(bytearray([0xC1, 0x04, 0x0F, 0x29]))
-    # proto.write(bytearray([0xC1, 0x06, 0x03, 0x29, 0x1D, 0x50]))
+    proto.write(bytearray([0xC1, 0x04, 0x0F, 0x29]))  # weather
 
-    proto.write(bytearray.fromhex('c118 26fe 0050 0000 6300 00005000 0000 6300 0000 0100 0000'))
-    proto.write(bytearray.fromhex('c110 27fe 001e 0014 1e00 00001400 0000'))
-    # proto.write(bytearray.fromhex('c106 0300 0fc2'))
-    proto.write(SStats(proto.player))
-    proto.write(SInventory(proto.player.inventory))
-    # proto.write(bytearray.fromhex('c1 18 f311 0600 002e 06014303 0244 0403 4505 0446 0605 4707 c106a006 ffff'))
-    proto.write(bytearray.fromhex('c1 05 f311 00'))
-    proto.write(bytearray.fromhex('c1 06 a006 ffff'))
-    proto.write(SMeetPlayer(proto.cid, proto.player))
+    proto.write(SStats(player))
+    proto.write(SInventory(player.inventory))
+    proto.write(SMeetPlayer(proto.cid, player))
+    proto.write(SSkillList(player.skills))
 
-    # GCAnsMapSvrAuth (iIndex, iSendResult);
-    #         DataSend(aIndex, (LPBYTE)&pjMsg, pjMsg.h.size);         // ¿©±â±îÁö ÇÏ¸é »ç¶÷ÀÇ ¸ð½À¸¸ º¸ÀÎ´Ù.
-    #         GCItemListSend(aIndex);                                                         // ¿©±â±îÁö ÇÏ¸é »ç¶÷ÀÌ ÀåºñÇÑ °ÍÀÌ º¸ÀÎ´Ù.
-    #         GCMagicListMultiSend( lpObj );                                          // ¿©±â±îÁö ÇÏ¸é »ç¶÷ÀÇ ¸¶¹ý¸®½ºÆ®¸¦ ÇÑ¹æ¿¡ º¸³½´Ù.
-    # GCSendMapMoveChecksum
-    # GCSendFatigueInfo
-    # proto.write(bytearray([0xC1, 5, 0xB1, 0x01, 0x01]))
-    proto.write(bytearray([0xC1, 5, 0xBF, 0x15, 0x5A]))
+    for c in proto.server.get_monsters_within(player.map_id, player.x, player.y):
+        proto.write(SMeetMonster(c))
 
-    # magic_list = [0x0B, 0x11]
-    # for i in range(1, 10):
-    #     magic_list.append(i)
-    #     magic_list.append(i+0)
-
-    # magic = Base(bytearray([0xC1, 0x00, 0xF3, 0x11, 0x00, 0]))
-    # magic.length = len(magic)
-    # proto.write(magic)
-    #
-    # proto.write(bytearray([0xC1, 6, 0x8E, 0x01, 0x00, 0x00]))
-
-    # for c in proto.server.get_monsters_within(proto.player.x, proto.player.y):
-    #     proto.write(SMeetMonster(c))
-    #
-    # for c in proto.server.get_players_within(proto.player.x, proto.player.y):
-    #     if c != proto:
-    #         proto.write(SMeetPlayer(c.cid, c.player))
-    #         c.write(SMeetPlayer(proto.cid, proto.player))
+    for c in proto.server.get_players_within(player.map_id, player.x, player.y):
+        if c != proto:
+            proto.write(SMeetPlayer(c.cid, c.player))
+            c.write(SMeetPlayer(proto.cid, player))

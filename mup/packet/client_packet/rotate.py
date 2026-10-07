@@ -3,6 +3,7 @@ from mup.packet.base import Base
 
 class Rotate(Base):
     direction = None
+    action = None
 
     @property
     def sub(self):
@@ -15,4 +16,4 @@ class Rotate(Base):
     def __init__(self, src):
         super().__init__(src)
         self.direction = src[3]
-        print(__class__, 'Unknown', src[4])
+        self.action = src[4]

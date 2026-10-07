@@ -3,7 +3,7 @@ from mup.packet.base import Base
 
 class Attack(Base):
     attacked_cid = None
-    skill = None
+    action = None
     direction = None
 
     @property
@@ -14,5 +14,5 @@ class Attack(Base):
         super().__init__(src)
 
         self.attacked_cid = self[3] << 8 | self[4]
-        self.skill = self[5]
+        self.action = self[5]  # attack animation, sent to others in the action packet
         self.direction = self[6]

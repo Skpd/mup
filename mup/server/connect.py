@@ -1,4 +1,4 @@
-from random import randint
+import os
 
 from mup.packet.server import SHandshake
 from mup.server.base import ServerBase
@@ -10,11 +10,11 @@ class ConnectServer(ServerBase):
     def __init__(self):
         super().__init__()
 
+        # address the client connects to for the game server, 172.17.0.1 for a client in docker
+        gs_host = os.environ.get('MU_GS_HOST', '127.0.0.1')
+
         self.available_servers = [
-            {'code': 1, 'group': 4, 'load': randint(0, 100), 'ip': '172.17.0.1', 'port': 55901},
-            {'code': 2, 'group': 4, 'load': randint(0, 100), 'ip': '127.0.0.1', 'port': 55901},
-            {'code': 3, 'group': 4, 'load': randint(0, 100), 'ip': '172.17.0.2', 'port': 55901},
-            {'code': 4, 'group': 4, 'load': randint(0, 100), 'ip': '10.0.2.15', 'port': 55901},
+            {'code': 0, 'group': 0, 'load': 50, 'ip': gs_host, 'port': 55901},
         ]
 
     def add_connection(self, c):

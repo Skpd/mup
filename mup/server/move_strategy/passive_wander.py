@@ -14,7 +14,7 @@ def move(me: Monster, server: GameServer):
     cur_pos = (me.x, me.y)
     new_pos = (me.x + random.randint(-2, 2), me.y + random.randint(-2, 2))
 
-    for c in server.get_all_within_distance(*cur_pos):
+    for c in server.get_all_within_distance(me.map_id, *cur_pos):
         if isinstance(c, BaseProtocol):
             c.write(SMeetMonster(me, tx=new_pos[0], ty=new_pos[1]))
             c.write(SMove(me.cid, *new_pos, 0))
