@@ -6,7 +6,7 @@ import logging
 from collections import deque
 from mup.model.item import GRID, GroundItem
 from mup.packet.server import SPickUpResult
-from mup.server import inventory, view
+from mup.server import inventory, skill, stats, view
 from mup.server.world import distance
 
 logger = logging.getLogger(__name__)
@@ -93,6 +93,8 @@ def drop(game, c, slot, x, y):
     del p.inventory[slot]
     if slot < GRID:
         inventory.look_changed(game, c, slot)
+        stats.update(c)
+        skill.update_weapon_skills(game, c)
     logger.debug('%s drops %s at %s,%s', p.name, item, x, y)
     place(game, p.map_id, x, y, item=item)
     return True

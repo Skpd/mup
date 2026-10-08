@@ -6,12 +6,12 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 ## Layout
 
 - `bin/cs.py` connect server (port 44405), `bin/gs.py` game server (55901). Run from the repo root, `data/`
-  (crypto keys, the client's terrains, `Gate.bmd` and `item.bmd`, the server's `Monster.txt` /
-  `MonsterSetBase.txt` / `Item.txt`), `config.ini` and the database are opened with relative paths. `bin/account.py`: accounts
-  (create, password, personal code, ban).
+  (crypto keys, the client's terrains, `Gate.bmd`, `item.bmd` and `skill.bmd`, the server's `Monster.txt` /
+  `MonsterSetBase.txt` / `Item.txt` / `Skill.txt`), `config.ini` and the database are opened with relative paths.
+  `bin/account.py`: accounts (create, password, personal code, ban, GM).
 - `config.ini` (or the file in `MU_CONFIG`), read by `mup/config.py`: ports, advertised GS host, exp / drop rates,
-  database file and autosave, monster and item data files, fixed drops, account auto creation, log level, packet
-  logging.
+  database file and autosave, monster, item and skill data files, fixed drops, account auto creation, log level,
+  packet logging.
 - `mup/packet/`: `base.py` has `Base(bytearray)` (type, size, head, sub) and the declarative `Packet`: `code`, `size`,
   `fields` as `(offset, name, type[, default])`, `entry` for lists. Field types carry the byte order (`u16` LE,
   `u16be`, `cid` BE). `Packet(name=value)` builds, `Packet(data)` parses into attributes; list packets have an
@@ -20,9 +20,13 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 - `mup/server/`: `protocol.py` (framing, crypto, dispatch to handlers), `game.py` (`GameServer`: connections by cid,
   maps, the 100 ms game tick, entering, walking, relocating), `world.py` (maps, grids of who is where),
   `terrain.py`, `view.py` (what each client has in view, `12` / `13` / `14`, ground items `20` / `21`), `gate.py`,
-  `monster.py` (monster data, spawns), `ai.py` (monster behaviour), `path.py`, `combat.py` (hits, death, respawn,
-  regen), `item.py` (item data, wear slots, requirements), `inventory.py` (grid, what may be worn, moves, potions),
-  `ground.py` (items on the ground, drop, pick up), `loot.py` (monster drops), `connect.py`,
+  `monster.py` (monster data, spawns), `ai.py` (monster and summon behaviour), `path.py`, `combat.py` (hits, miss,
+  ammunition, pace, death, respawn, regen), `stats.py` (what class, stats and items give, the client's formulas,
+  `F3 06`), `experience.py` (kill exp, level up, death loss), `skill.py` (skill data, the list, learning, weapon
+  skills), `casting.py` (skills on targets and areas, `1D` hits, buffs, teleport), `effect.py` (poison, ice, buffs,
+  `1B`), `summon.py`, `item.py` (item data, wear slots, requirements, durability), `inventory.py` (grid, what may be
+  worn, moves, potions, scrolls), `ground.py` (items on the ground, drop, pick up), `loot.py` (monster drops),
+  `command.py` (GM commands in chat), `connect.py`,
   `handler/*` (one per packet, registered in `bin/gs.py` / `bin/cs.py`), `character.py` (creation rules, start
   and respawn gates). Game time is `GameServer.now`, the tick passes it on.
 - `mup/model/` dataclasses. `mup/repository/`: SQLite storage (`database.py` schema migrations, account and
@@ -46,8 +50,9 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 
 - `./venv/bin/python tests/client.py`: starts its own CS and GS with a test config (ports 44415 / 55911, packet
   logging on, its own monster and drop files), plays two clients through login, character creation, walking, chat,
-  combat, magic, drops, picking up, wearing and dropping items, a potion, disconnect, relog, monsters chasing and
-  killing, respawn and a gate. Run it after every change and extend
+  combat, magic, drops, picking up, wearing and dropping items, a potion, disconnect, relog, GM commands, level up
+  points, skills (scrolls, area hits, poison, teleport, weapon skills, an elf's buff, arrows, summons), monsters
+  chasing and killing, respawn and a gate, one function per area. Run it after every change and extend
   it with every feature. It checks raw offsets from the doc, never the packet definitions, so a wrong definition
   fails it.
 - The real client is the final check: ask the user to try it and paste the log.

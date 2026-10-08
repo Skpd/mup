@@ -1,14 +1,14 @@
 import asyncio
 import logging
-from collections import Counter
+from collections import Counter, deque
 from itertools import count
 from mup.config import Config
 from mup.model.item import Item
-from mup.packet.server import SServerJoin, SStats, SMeetPlayer, SSkillList, SMove
+from mup.packet.server import SServerJoin, SStats, SMeetPlayer, SSkillList, SMove, SKeySettings
 from mup.repository import database
 from mup.repository.account import AccountRepository
 from mup.repository.character import CharacterRepository
-from mup.server import ai, combat, gate, ground, inventory, item, loot, monster, view
+from mup.server import ai, combat, effect, gate, ground, inventory, item, loot, monster, skill, stats, summon, view
 from mup.server.base import ServerBase
 from mup.server.character import respawn_gate
 from mup.server.world import load_maps
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 TERRAIN_PATH = 'data/terrain'  # the client's World*/Terrain*.att
 GATE_PATH = 'data/Gate.bmd'  # the client's
 ITEM_PATH = 'data/item.bmd'  # the client's
+SKILL_PATH = 'data/skill.bmd'  # the client's
 TICK = 0.1  # seconds between game ticks
 
 
@@ -37,6 +38,7 @@ class GameServer(ServerBase):
 
         self.item_info = item.load_info(ITEM_PATH, config.item_info)
         self.fixed_drops = loot.load_fixed(config.item_drops, self.item_info)
+        self.skills = skill.load(SKILL_PATH, config.skill_info)
         self.ground = ground.Ground()
 
         self.db = database.connect(config.db_path)
@@ -46,10 +48,11 @@ class GameServer(ServerBase):
 
         self.maps = load_maps(TERRAIN_PATH)
         self.gates = gate.load(GATE_PATH)
-        info = monster.load_info(config.monster_info)
+        self.monster_info = info = monster.load_info(config.monster_info)
         spawns = monster.load_spawns(config.monster_spawns, info)
         self.monsters = {m.cid: m for m in monster.create(spawns, info, count(1), self.first_player_cid - 1)}
         self.dead_monsters = set()
+        self.affected = set()  # players (connections) and monsters with effects, mup.server.effect
         now = self.now
         missing = [m for m in self.monsters.values() if not monster.spawn(self, m, now)]
         if missing:
@@ -59,6 +62,8 @@ class GameServer(ServerBase):
             for m in missing:
                 del self.monsters[m.cid]
         logger.info('%s monsters on %s maps', len(self.monsters), len({m.map_id for m in self.monsters.values()}))
+        # summons take the monster ids left
+        self.summon_cids = deque(range(max(self.monsters, default=0) + 1, self.first_player_cid))
         logger.info('%s item types, fixed drops for %s monster types', len(self.item_info), len(self.fixed_drops))
 
         self.next_save = now + config.autosave_interval
@@ -92,9 +97,14 @@ class GameServer(ServerBase):
             if len(m.players):
                 self._run(ai.tick, self, m, now)
         for mob in [mob for mob in self.dead_monsters if mob.respawn_at <= now]:
-            self._run(monster.respawn, self, mob, now)
+            if mob.owner is not None:
+                self._run(summon.gone, self, mob)  # summons don't come back
+            else:
+                self._run(monster.respawn, self, mob, now)
         if len(self.ground):
             self._run(ground.tick, self, now)
+        if self.affected:
+            self._run(effect.tick, self, now)
         for c in self.playing():
             self._run(self._player_tick, c, now)
         if now >= self.next_save:
@@ -119,8 +129,11 @@ class GameServer(ServerBase):
             combat.regen(c)
 
     def new_item(self, info, **values):
-        """A new Item of type info with the next serial."""
-        return Item(info, serial=next(self.serials), **values)
+        """A new Item of type info with the next serial, full durability unless values has one."""
+        new = Item(info, serial=next(self.serials), **values)
+        if 'durability' not in values:
+            new.durability = item.max_durability(new)
+        return new
 
     def playing(self):
         return [c for c in self.connections.values() if c.player is not None]
@@ -145,16 +158,23 @@ class GameServer(ServerBase):
         c.playing = True
         c.view = set()
 
+        p.values = stats.compute(p)
+        p.life, p.mana = min(p.life, p.max_life), min(p.mana, p.max_mana)
+        skill.update_weapon_skills(self, c, notify=False)  # the list goes out below
         # no weather packet (0x0F): this client ignores what other versions send on join
         c.write(SStats.of(p))
         inventory.send(c)
         c.write(SMeetPlayer.of([(c.cid, p)]))
         c.write(SSkillList.of(p.skills))
+        if p.key_settings:
+            c.write(SKeySettings.of(p.key_settings))  # after the list, the client finds the hotkeys' skills in it
         self.maps[p.map_id].add_player(c)
         view.refresh(self, c)
 
     def leave_world(self, c):
         """Saves the character of connection c and takes it out of the game, the account stays logged in."""
+        effect.clear(self, c)
+        summon.dismiss(self, c)
         self.save(c)
         view.forget(self, c)
         self.maps[c.player.map_id].remove_player(c)
@@ -176,6 +196,8 @@ class GameServer(ServerBase):
         the client clears its objects on it, so everything in view is sent again.
         """
         p = c.player
+        if map_id != p.map_id:
+            summon.dismiss(self, c)
         view.forget(self, c)
         self.maps[p.map_id].remove_player(c)
         p.map_id, p.x, p.y, p.direction = map_id, x, y, direction

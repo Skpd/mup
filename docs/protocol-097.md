@@ -111,19 +111,22 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C1 F3 06` level up point result | `[4]` high nibble 0: nothing changes. Otherwise the low nibble is the stat (0 str, 1 agi, 2 vit, 3 ene): the client takes one level up point and adds 1 to the stat itself, vit also sets max life and ene max mana to `[6..7]`. No maximum is checked | code `0x41b9a0` (asm) |
 | `C4 F3 10` inventory | must be encrypted. `[5]` count, then 5 bytes each: `[+0]` slot, `[+1..4]` item (see [Items](#items)). Slots 0..11 equipment, 12..75 the 8 x 8 grid (`slot - 12 = y * 8 + x`, the item's top left tile). The client empties equipment and grid first, then places each item (`0x48d940`) | code `0x414310` |
 | `C1 F3 11` skill list | `[4]` count (max 20), then 3 bytes each: `[+0]` slot, `[+1]` skill number, `[+2]` unused. `[4]` = `0xFE`: set one skill, `[5]` slot `[6]` number. `[4]` = `0xFF`: remove skill at slot `[5]` | code `0x414010` |
+| `C1 F3 30` key settings | 18 bytes: `[4..13]` the skill number on hotkey 0..9, `FF` none: the client looks the number up in its skill list (character `+0x63`) and puts that list index on the hotkey. `[14..17]` other settings, read, not reviewed. Same layout as the client's `F3 30` | code `0x41ff50` |
 | `C1 00` chat | `[3..12]` name, `[13..72]` message. Message prefix `~` party, `@` guild, `#` shout, anything else normal chat | code `0x414960` |
 | `C1 0D` notice | `[3]` type, `[4..]` text | code `0x414d10` (reads only) |
 | `C1 0F` weather | `[3]` high nibble: 0 turns the effect off, 1 turns it on with intensity low nibble * 6, other values are ignored | code (dispatcher) |
 | `C1 10` walk | `[3..4]` cid, `[5]` x `[6]` y, `[7]` direction in the high nibble. Any object but the hero (players and monsters alike): x, y becomes its walk target and the client finds the path there from the tile it has the object on (`0x425720`), puts it on the target when there is none. The hero: x, y becomes its tile when it isn't walking. Dead objects (`17`) are ignored | code `0x414ea0` |
-| `C1 11` place | `[3..4]` cid, `[5]` x `[6]` y: puts the object on x, y without walking. Not used by mup | code `0x415250` |
+| `C1 11` place | `[3..4]` cid, `[5]` x `[6]` y: puts the object on x, y without walking. mup sends it to the players who see a teleport | code `0x415250` |
 | `C2 12` players in view | `[4]` count, then **32 bytes** each: `[+0..1]` cid, `[+2]` x `[+3]` y, `[+4]` class `<< 5 \| 2nd class << 4 \| pose` (pose 2..4 pick a sitting / leaning animation), `[+5..14]` equipment, `[+16]` effects bits 0..3 (poison, ice, damage buff, defense buff) and `[+17]` bit 0 another effect, `[+18..27]` name, `[+28]` target x `[+29]` target y, `[+30]` direction << 4 \| pk level, `[+31]` unused. Names containing `webzen` are skipped | code `0x4164b0` |
 | `C2 13` monsters in view | `[4]` count, then 12 bytes each: `[+0..1]` cid, `[+2]` type, `[+3]` unused, `[+4..5]` effects (little endian word: bits 0..3 as in players in view, bit 8 the `[+17]` effect), `[+6]` x `[+7]` y, `[+8]` target x `[+9]` target y, `[+10]` direction in the high nibble. The client creates the monster at x, y and walks it to the target. Bit 15 of the cid set: no walk, `0x416ed0` instead (not reviewed, usual meaning: just respawned). Creating fails when the 400 objects are taken, the rest of the list is skipped then | code `0x416fe0` |
+| `C2 1F` summons in view | `[4]` count, then **22 bytes** each: `[+0..10]` as in `13` (bit 15 of the cid: no walk), `[+10]` low nibble stored where players keep the pk level, `[+11..20]` the owner's name: the client names the monster after its owner (`Text.bmd` 485 "Of" and the monster's name appended) | code `0x4172c0` |
 | `C1 14` out of view | `[3]` count, then cids from `[4]` | code (dispatcher, asm) |
 | `C1 15` damage | `[3..4]` target cid, `[5..6]` BE: damage in the low 13 bits (max 8191), flags in bits 13..15 of the BE word, i.e. `[5]` bits 5..7: bit 7 blue (critical), bit 6 green (excellent), bit 5 magenta, green wins over blue over magenta, none: orange, red when the target is you. Damage 0 shows a miss. When the target is you the client also subtracts the damage from its life (hero `+0x1C`, 2 bytes, stops at 0). The mask is `AND EBX, 0x1FFF` at `0x417a0c`, the value's high byte and the flags are both read from `[5]` through `AL` (`0x4179ea`) | code `0x4179a0` |
-| `C3 16` kill exp | must be encrypted: `[3..4]` killed cid, `[5..6]` exp BE, `[7..8]` damage BE, shown like a damage number. The damage is a full 16 bits, unlike `15`. The exp is added to the hero's 4 byte exp | code `0x4199a0` |
+| `C3 16` kill exp | must be encrypted: `[3..4]` killed cid, bit 15 clear: the hero swings at the object (it is the killer's melee hit), set: `0x42b200` on the object instead (mup sets it for skills and the other players who share the exp), `[5..6]` exp BE, `[7..8]` damage BE, shown like a damage number. The damage is a full 16 bits, unlike `15`. The object's dead flag is set, the exp is added to the hero's 4 byte exp and shown in the chat log when not 0 | code `0x4199a0` |
 | `C1 17` killed | `[3..4]` cid of the dying object, nothing else is read. Sets the object's dead flag (`+0x2cd`) and stops its walk, the hero too | code (dispatcher, asm) |
 | `C1 18` animation | `[3..4]` cid, `[5]` direction, `[6]` animation, nothing after it is read. Puts the object on its walk target first. Animations: `64` / `65` attack (players: by weapon, monsters: animation 4, every third time 3, their two attacks), `66` / `67` stand, `12` and `6C`..`80` emotes (mapped per class), anything else sets that animation number directly | code `0x417fc0`, `0x42a950` |
-| `C3 19` skill animation | must be encrypted: `[3]` skill number, `[4..5]` caster cid, `[6..7]` target cid (bit 15: effect applied) | code `0x4186b0` |
+| `C3 19` skill animation | must be encrypted: `[3]` skill number, `[4..5]` caster cid, `[6..7]` target cid (bit 15: effect applied, kept on the caster at `+0x2d1` for the hit) | code `0x4186b0` |
+| `C1 1B` effect ended | `[3]` skill number, `[4..5]` cid: clears the effect bit (object `+0x76`) of the skill: 1 poison bit 0, 7 ice bit 1, 28 greater damage bit 2, 27 greater defense bit 3, 16 mana shield bit 8. Other skills: nothing | code `0x418500` |
 | `C3 1C` map move | must be encrypted: `[3]` 0: teleport on the map with the teleport animation, objects stay. Anything else: map change, the client removes all objects but the hero, loads `[4]` when it isn't the current map and answers `F3 12`. `[4]` map, `[5]` x `[6]` y, `[7]` direction. Also ends the wait after its own `1C` request | code `0x415520` |
 | `C3 1E` area skill animation | must be encrypted: `[3]` skill number, `[4..5]` caster cid, `[6]` x `[7]` y | code `0x418fd0` |
 | `C2 20` items in view | `[4]` count, then 8 bytes each: `[+0..1]` item id BE (0..999, the client puts larger ids on 0), bit 15 set: just dropped (falls with a sound), `[+2]` x `[+3]` y, `[+4..7]` item. **Zen** (type `0x1CF`, 14/15) takes 9 bytes: the amount is 24 bits, `[+5]` `[+6]` `[+8]` big endian, `[+4]` `CF` and `[+7]` `80` give the type | code `0x419f90`, `0x4b58a0` |
@@ -152,7 +155,7 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C1 F3 00` character list request | no fields | traffic |
 | `C1 F3 01` create character | `[4..13]` name, `[14]` class: **class number << 2** (0 dw, 16 dk, 32 elf, 48 mg), everything the server sends uses class number << 3 | traffic |
 | `C3 F1 02` logout request | 5 bytes, sent encrypted: `[4]` type as in the result: 0 close the game, 1 character select, 2 server select. Preceded by `F3 30` (types 0 and 1 before, type 2 right after). The sender isn't in the sender index, a byte scan for `F1` head stores doesn't find it either | traffic (`1791402942.log`, `1791403016.log`) |
-| `C1 F3 30` key settings | 18 bytes, sent on every logout: `[4..13]` 10 bytes (skill hotkeys, all 0 when none set), `[14..17]` `09 00 04 08` seen. Layout not reviewed, presumably what the server sends back with `F3 30` on join | traffic |
+| `C1 F3 30` key settings | 18 bytes, sent on every logout (`0x4c0000`): `[4..13]` the skill number on hotkey 0..9 (taken from the skill list, all 0 when none set in traffic), `[14..17]` other settings (window flags, values + `0x40`; `09 00 04 08` seen), not reviewed. The server's `F3 30` has the same layout | code, traffic |
 | `C3 31` | no fields, sent right after `F3 00` when going back to character select. Usual meaning: close the NPC / shop window. Sent by the quest window's close (`0x401920`: answer return code 2, close button), which the character select reset (`0x412700`) also calls | traffic, code `0x401920` |
 | `C3 30` talk | `[3..4]` NPC cid. Sent when clicking an NPC of type 234 (`EA`) or higher, clicks on lower types send nothing | code `0x4650a0` |
 | `C3 A0` quest states request | no fields, sent right before `30` while the client has no quest class yet (until the first `A0` arrives) | code `0x4650a0` |
@@ -165,15 +168,16 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C1 10` walk | `[3]` x `[4]` y (start of the walk), `[5]` direction << 4 \| step count, `[6..]` step directions, one per nibble, high nibble first. Sent with 0 steps to only turn | traffic |
 | `C1 15` attack | `[3..4]` target cid, `[5]` attack animation (0x64 seen), `[6]` direction | traffic, code `0x4650a0` |
 | `C1 18` animation | `[3]` direction, `[4]` animation (0x66 seen when turning) | traffic |
-| `C3 19` skill on target | `[3]` skill list index, `[4..5]` target cid | code `0x462140` |
+| `C3 19` skill on target | `[3]` skill list index (the selected one, hero object `+0x361`), `[4..5]` target cid. Sent when the target is within the skill's distance (`skill.bmd`, tiles; knight weapon skills 19..23 1.2 times it), otherwise the hero walks there first. Knight weapon skills send a `10` turn before it. The summons (30..36) are sent as `19` too, with the hero's cid presumably (`0x57c70d4`, not reviewed), never on map 10 | code `0x462140`, `0x4650a0` |
 | `C3 1E` area skill | `[3]` skill list index, `[4]` x `[5]` y, `[6]` direction | code `0x46f270` |
 | `C3 1C` move through a gate | 6 bytes: `[3]` gate number, `[4]` `[5]` 0. Sent while the hero stands in the area of an entrance gate (`Gate.bmd` kind 1) of its map and its level is at least the gate's (magic gladiators: two thirds of it, class number 3), else the client shows the level message. At most every 3 s and only one until a `1C` answer arrives. Gates 45..49, 55, 56 also need the hero not riding a Horn of Uniria / Dinorant (items `0x1A2` / `0x1A3`), 62..65 a check not reviewed | code `0x474030` |
-| `C3 1D` area skill hits | `[3]` skill list index, `[4]` x `[5]` y, `[6]` serial, `[7]` count, then target cids. **Has a byte between y and count** that OpenMU's 0.75 layout doesn't | code `0x442610` |
+| `C3 1C` teleport | 6 bytes: `[3]` 0, `[4]` x `[5]` y, the target tile. Sent for the teleport skill (6) when the target tile's attribute is 0 (no safe zone, wall or anything), at most every 3 s and one until the `1C` answer, not riding (13/2 check, not reviewed). The answer is `1C` with `[3]` 0 | code `0x46f270` |
+| `C3 1D` area skill hits | `[3]` skill list index, `[4]` x `[5]` y, `[6]` serial, `[7]` count, then target cids BE. **Has a byte between y and count** that OpenMU's 0.75 layout doesn't. Sent by the skill effects as they land (`0x442ec0`, `0x447d60`, `0x448120`, `0x450190`), so one cast can send several: at most 5 targets, objects within a radius of the effect's point (80..300 world units, 0.8..3 tiles, per effect), monsters or the one player the skill aims at, not dead, not the hero. Nothing is sent when no object is in reach. x, y and serial come from the effect | code `0x442610` |
 | `C1 00` chat | name + message, not reviewed yet: send a chat line and check the log | - |
 | `C3 22` pick up | `[3..4]` item id BE. Sent when the hero is within 150 units of the item (1.5 tiles from the tile centre, the client walks there first) and the item fits in the grid (zen always), one at a time until `22` answers | code `0x4650a0` |
 | `C3 23` drop | `[3]` x `[4]` y (the tile under the mouse), `[5]` the slot the held item came from | code `0x497760` |
 | `C3 24` move | 11 bytes: `[3]` source window, `[4]` source slot, `[5..8]` the item as the client has it, `[9]` target window, `[10]` target slot. Windows and slots as in the result. One at a time until `24` answers. The client also sends it on its own: arrows / bolts from the grid into a hand when a bow / crossbow has none (`0x463d60`), the left hand item to the right hand (`0x474ac0`) | code `0x422db0` |
-| `C3 26` use item | `[3]` inventory slot, `[4]` target slot (0 for potions). Sent on a right click on 14/0..6 (apple, potions), 14/8, 14/9, 14/20, group 15 (scrolls), 12/7..14, 12/16..19, and by the potion hotkeys. Locks item use until the server unlocks it (see [Items](#items)) | code `0x4916f0` |
+| `C3 26` use item | `[3]` inventory slot, `[4]` target slot (0 for potions). Sent on a right click on 14/0..6 (apple, potions), 14/8, 14/9, 14/20, group 15 (scrolls), 12/7..14, 12/16..19, and by the potion hotkeys, and by the client itself with a mana potion's slot when the hero lacks the mana for a skill (`0x46f270`). Locks item use until the server unlocks it (see [Items](#items)). mup answers a scroll / orb it teaches with `F3 11` `FE` and `28` (slot, 1), the usual answer, not checked in the client's code | code `0x4916f0` |
 
 ## Terrain
 
@@ -335,6 +339,77 @@ client sends no `26` and the equipment window takes no clicks. Unlocked by `26 F
 with `[5]` not 0, `29` (not reviewed) and the character select reset. The usual answer to a potion: `2A` slot,
 count left, 1, or `28` slot, 1 when it was the last one.
 
+## Character values
+
+What the client computes for the hero from its class, stats and equipment (code): `0x45c9f0` calls `0x45bbd0`
+(damage), `0x45c1b0` (wizardry damage), `0x45c400` (attack rate), `0x45c430` (speeds), `0x45c650` (defense rate),
+`0x45c7d0` (defense), `0x45c910`, `0x45c940` (from armor and boots, not reviewed); run on equipment changes and by the
+`34` handler. The character attributes (pointer at `0x7c0dd1c`, see the hero character) keep them: `+0x44` attack
+speed, `+0x46` attack rate, `+0x48` / `+0x4a` damage min / max right hand, `+0x4c` / `+0x4e` left hand, `+0x50`
+magic speed, `+0x52` / `+0x54` wizardry damage, `+0x58` defense rate, `+0x5a` defense. Class number is the class byte
+`& 7`: 0 dark wizard, 1 dark knight, 2 elf, 3 magic gladiator. Integer division everywhere.
+
+| value | formula |
+|---|---|
+| damage | a bow / crossbow worn with durability: agi / 8 .. agi / 4. Elves without: (str + agi) / 8 .. (str + agi) / 4. Others: str / 8 .. str / 4. Each hand adds its weapon's damage, its option `3C` and the wings' `3C` (both after the durability factor), then the excellent `49` (+ level / 20) and `4A` (+ 2%) of the weapon and of the pendant. The left hand starts from the same base |
+| wizardry damage | ene / 9 .. ene / 4, + the staff's and the wings' option `3D` (after the durability factor), + excellent `4B` (level / 20) of the staff and the pendant, `4C` (+ 2%) of the pendant |
+| attack rate | level * 5 + agi * 3 / 2 + str / 4 |
+| attack speed | elves agi / 50, knights and gladiators agi / 15, wizards agi / 20. Magic speed: elves agi / 50, others agi / 20. Both add the weapons' attack speed (`item.bmd` 39; the average when both hands hold a weapon below `0xC0` with durability, arrows / bolts not counted), the gloves', 20 while character `+0x38` bit 0 is set (presumably the ale 14/9), excellent `4D` (+ 7) of the hands and the pendant |
+| defense rate | elves agi / 4, others agi / 3, + the shield's defense rate and its option `3E` (after the durability factor), then + 10% per excellent `46` on shield, helm, armor, pants, gloves, boots and rings |
+| defense | elves agi / 10, knights agi / 3, wizards agi / 4, gladiators agi / 5, + the defense (with option `3F`) of the left hand, helm, armor, pants, gloves, boots and wings, each after its durability factor. A bonus while `0x7a5f9c8` is set (not reviewed) |
+
+The window (`0x4a20e0`) shows `Dmg(rate): min~max (attack rate)` of the right hand, of the left hand when it holds a
+bow (and the right no crossbow) or the right is empty. Knights and gladiators with a weapon in each hand: 55% of each
+hand added. Character `+0x38` bit 1: + 15 damage (presumably an item effect). `Defense (rate): defense (defense
+rate)`. Wizardry damage is the selected skill's (below), with a staff `(+n)`: staff damage min / 2 + 2 * staff
+level, after the staff's durability factor (magic durability, `item.bmd` 42). Knights show `Skill Damage: 200 +
+ene / 10 %`, gladiators `200 + ene / 30 %`.
+
+**Durability factor** (`0x45baf0`): maximum = `item.bmd` durability + 1 per item level for levels 1..4 and 2 per
+level above, + 15 for excellent items. worn = 1 - durability / maximum: above 0.8 the value loses 50%, above 0.7
+30%, above 0.5 20%, otherwise nothing (`v - int(v * factor)`).
+
+**Item values** (`0x45a270`): damage min / max, defense rate, defense and magic defense grow with the item level as in
+[Items](#items) (shields' defense only + 1 per level). Excellent items add first: damage min and max
+`min * 25 / drop level + 5` (the max uses the min's base too), defense rate `rate * 25 / drop level + 5`, defense
+`drop level / 5 + defense * 12 / drop level + 4`.
+
+**Options** of an item (`+0x24` count, `+0x25` ids, `+0x2d` values), texts from `Text.bmd`:
+
+| id | | items |
+|---|---|---|
+| `12`..`18` | the weapon's skill, the id is the skill number: 18 defense (shields 6/4..6/31), 19 falling slash (0/12, 1/2..1/31, 2/1, 2/3, 2/4), 20 lunge (0/3, 0/6, 0/9, 0/11, 0/17, 3/4), 21 uppercut (0/4, 0/7, 0/8), 22 cyclone (0/5, 0/10, 0/13, 0/14, 0/16, 3/0, 3/7..3/9), 23 slash (0/15, 2/5, 2/6, gladiators 0/18), 24 triple shot (elf bows / crossbows). Only with the skill bit and when the class byte allows a knight (an elf for 24, a gladiator for 0/18) | weapons, shields |
+| `3C` | damage + 4 * option | weapons, wings of satan 12/2 |
+| `3D` | wizardry damage + 4 * option | staffs, wings of heaven 12/1 |
+| `3E` | defense rate + 5 * option | shields |
+| `3F` | defense + 4 * option | armor |
+| `40` | luck: jewel of soul + 25%, critical damage rate + 5% | types below `0x180` but arrows / bolts, wings |
+| `41` | automatic life recovery option % | rings, pendants, wings of elf 12/0 |
+| `42`..`47` | excellent bits 5..0: life + 4%, mana + 4%, damage decrease 4%, reflect damage 4%, defense rate + 10%, zen + 40% | shields, armor, rings 13/8, 13/9 |
+| `48`..`4F` | excellent bits 5..0: excellent damage rate (10%), damage + level / 20 (`4B` wizardry), damage + 2% (`4C` wizardry), attack speed + 7, life + life / 8 after a kill, mana + mana / 8 after a kill | weapons, staffs, pendants 13/12, 13/13 |
+
+## Skills
+
+`Data\Local\skill.bmd` (files, code): 64 records of 38 bytes + 4, xor `FC CF AB` with the key restarting at every
+record, the record index is the skill number. Kept in memory at the pointer `0x7c45a48`, encrypted with another key
+between uses (`0x45cb20`). Copied to `data/skill.bmd`.
+
+| offset | |
+|---|---|
+| 0..31 | name |
+| 32 | level: equals the drop level of the skill's scroll / orb (unused otherwise, not reviewed) |
+| 33 | damage |
+| 34..35 | mana |
+| 36 | distance, tiles |
+| 37 | not reviewed |
+
+- Wizardry damage of a skill (`0x45cb20`): wizardry min + damage .. wizardry max + damage * 3 / 2.
+- Mana (`0x45cdc0`): the record's. With too little mana the client sends `26` with a mana potion slot itself
+  (`0x46f270`).
+- Learning: scroll 15/n teaches skill n + 1 (15/0 poison .. 15/13 inferno), orbs 12/7 skill 41, 12/8 26, 12/9 27,
+  12/10 28, the summon orb 12/11 skill 30 + its level (the tooltip `0x487030` names it). The scroll's energy
+  requirement is the item's (see Items).
+
 ## Client limits
 
 From code, values the client holds or shows:
@@ -475,10 +550,7 @@ reads past the condition. NPC names come from `Data/Local/NpcName(Eng).txt`, one
 The layout differences found in the first review were fixed in roadmap M0 (character info, damage, players in view,
 ping, login tick, weather, server list / info, `F3 30`). Still open:
 
-1. **`C3 1D` area skill hits are not handled**. The client reports what an area skill hit, mup instead
-   damages everything within 5 tiles of the target point when the skill is cast (`handler/magic.py`) and logs
-   the reports as unhandled. Roadmap M4.
-2. **C3 serial**: mup's counter (`Crypt.encrypt_sequence`) starts at 0 per connection, matching the client after
+1. **C3 serial**: mup's counter (`Crypt.encrypt_sequence`) starts at 0 per connection, matching the client after
    a fresh start. If the client keeps its counter across a reconnect, the first encrypted packet of the new
    connection (character info) would be treated as unencrypted and dropped. Not seen yet, worth knowing when
    adding "switch server".

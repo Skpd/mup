@@ -7,6 +7,7 @@ usage: ./venv/bin/python bin/account.py list
        ./venv/bin/python bin/account.py password NAME PASSWORD
        ./venv/bin/python bin/account.py code NAME PERSONAL_CODE
        ./venv/bin/python bin/account.py ban NAME | unban NAME
+       ./venv/bin/python bin/account.py gm NAME | ungm NAME    GM commands in chat (mup/server/command.py)
 """
 import argparse
 import sys
@@ -14,6 +15,7 @@ import sys
 from mup import config
 from mup.common.password import hash_password
 from mup.error import NotFoundError
+from mup.model.account import GM
 from mup.repository import database
 from mup.repository.account import AccountRepository
 
@@ -32,7 +34,7 @@ def main(argv):
     code = commands.add_parser('code')
     code.add_argument('name')
     code.add_argument('personal_code')
-    for command in ('ban', 'unban'):
+    for command in ('ban', 'unban', 'gm', 'ungm'):
         commands.add_parser(command).add_argument('name')
     args = parser.parse_args(argv)
     # the client sends account, password and personal code in 10 byte fields
@@ -45,7 +47,8 @@ def main(argv):
 
     if args.command == 'list':
         for a in accounts.all():
-            print('{:<10} code {:<10} {}'.format(a.name, a.personal_code, 'active' if a.active else 'banned'))
+            print('{:<10} code {:<10} {}{}'.format(a.name, a.personal_code, 'active' if a.active else 'banned',
+                                              ' GM' if a.ctl_code & GM else ''))
         return 0
 
     if args.command == 'create':
@@ -63,6 +66,8 @@ def main(argv):
         a.password_hash = hash_password(args.password)
     elif args.command == 'code':
         a.personal_code = args.personal_code
+    elif args.command in ('gm', 'ungm'):
+        a.ctl_code = a.ctl_code | GM if args.command == 'gm' else a.ctl_code & ~GM
     else:
         a.active = args.command == 'unban'
     accounts.save(a)

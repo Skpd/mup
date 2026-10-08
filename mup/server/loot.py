@@ -46,7 +46,7 @@ def roll(game, mob):
                 loot.append(d.count)
             else:
                 info = game.item_info[d.type]
-                loot.append(game.new_item(info, level=d.level, durability=d.count or durability(info)))
+                loot.append(game.new_item(info, level=d.level, **({'durability': d.count} if d.count else {})))
 
     info = mob.info
     if info.item_rate and random.randrange(info.item_rate) < ITEM_CHANCE * game.config.drop_rate:
@@ -56,11 +56,6 @@ def roll(game, mob):
     elif info.money_rate and random.randrange(info.money_rate) < ZEN_CHANCE:
         loot.append(zen(info.level))
     return loot
-
-
-def durability(info):
-    """A new item's durability: its own, the magic durability of staffs, 1 (a count) for the rest."""
-    return info.durability or info.magic_durability or 1
 
 
 def random_item(game, monster):
@@ -78,7 +73,7 @@ def random_item(game, monster):
     if info.options:
         values['luck'] = random.random() < LUCK_CHANCE
         values['option'] = next((o for o, chance in OPTION_CHANCES if random.random() < chance), 0)
-    return game.new_item(info, durability=durability(info), **values)
+    return game.new_item(info, **values)
 
 
 def zen(level):

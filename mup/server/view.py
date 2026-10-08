@@ -5,7 +5,8 @@ other both ways.
 """
 from mup.model.item import GroundItem
 from mup.model.monster import Monster
-from mup.packet.server import SClear, SMeetMonster, SMeetPlayer, SMove, SGroundItems, SGroundZen, SItemsGone
+from mup.packet.server import (SClear, SMeetMonster, SMeetPlayer, SMeetSummon, SMove, SGroundItems, SGroundZen,
+                               SItemsGone)
 from mup.server.world import VIEW_RANGE, distance
 
 CHUNK = 100  # entries per packet: 14 is a C1 packet, 125 cids at most
@@ -25,12 +26,15 @@ def show(c, objects, dropped=False):
     """Sends c what it doesn't have in view yet of objects. dropped: ground items fall to the ground."""
     new = [o for o in objects if o not in c.view]
     players = [o for o in new if _is_player(o)]
-    monsters = [o for o in new if isinstance(o, Monster)]
+    monsters = [o for o in new if isinstance(o, Monster) and o.owner is None]
+    summons = [o for o in new if isinstance(o, Monster) and o.owner is not None]
     ground = [o for o in new if isinstance(o, GroundItem)]
     if players:
         _send(c, SMeetPlayer.of, [(o.cid, o.player) for o in players])
     if monsters:
         _send(c, SMeetMonster.of, monsters)
+    if summons:
+        _send(c, SMeetSummon.of, summons)
     items = [g for g in ground if g.item is not None]
     if items:
         _send(c, lambda chunk: SGroundItems.of(chunk, dropped), items)

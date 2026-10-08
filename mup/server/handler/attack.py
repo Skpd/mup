@@ -1,10 +1,9 @@
 import logging
-import random
 from mup.packet.client import CAttack
-from mup.packet.server import SAction, SDamage
-from mup.server import view
-from mup.server.combat import hit_monster
+from mup.packet.server import SAction
+from mup.server import combat, summon, view
 from mup.server.protocol import BaseProtocol
+from mup.server.world import distance
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +15,7 @@ def attack_handler(msg: CAttack, proto: BaseProtocol):
 
     logger.debug('%s attacking cid %s with %s facing %s', p.name, msg.attacked_cid, msg.action, msg.direction)
 
-    # todo check legit
-    # todo pvp
+    # todo pvp (roadmap M7)
 
     # the attacker animates on its own, others need the swing
     p.direction = msg.direction & 0x07
@@ -26,14 +24,13 @@ def attack_handler(msg: CAttack, proto: BaseProtocol):
         c.write(action)
 
     attacked = proto.server.monsters.get(msg.attacked_cid)
-    if attacked is None or attacked.dead or attacked not in proto.view:
+    if attacked is None or attacked.dead or attacked not in proto.view or attacked.owner is not None:
         return
-
-    dmg = 10 + p.level
-    flags = 0
-
-    if random.randint(0, 1) > 0:
-        flags = SDamage.CRITICAL
-        dmg = int(dmg * 1.3)
-
-    hit_monster(proto, attacked, dmg, flags)
+    if distance(p.x, p.y, attacked.x, attacked.y) > combat.reach(p):
+        logger.debug('%s at %s,%s is too far from %s at %s,%s', p.name, p.x, p.y, attacked.cid, attacked.x, attacked.y)
+        return
+    if not combat.paced(p, proto.server.now, p.values.attack_speed):
+        logger.info('%s attacks faster than its speed %s allows', p.name, p.values.attack_speed)
+        return
+    summon.owner_attacks(proto, attacked)
+    combat.player_attack(proto.server, proto, attacked)

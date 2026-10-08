@@ -22,3 +22,13 @@ def ping_handler(msg: CPing, proto: BaseProtocol):
 
     proto.server_tick = next_server_tick
     proto.client_tick = next_client_tick
+
+    # the client's speeds come from its own values (Character values in docs/protocol-097.md), a difference means
+    # a formula or an effect the server doesn't know, or a modified client
+    p = proto.player
+    if p is not None:
+        speeds = msg.attack_speed, msg.magic_speed
+        if speeds != (p.values.attack_speed, p.values.magic_speed) and speeds != proto.reported_speeds:
+            logger.info('%s reports attack / magic speed %s / %s, the server has %s / %s', p.name, *speeds,
+                        p.values.attack_speed, p.values.magic_speed)
+        proto.reported_speeds = speeds

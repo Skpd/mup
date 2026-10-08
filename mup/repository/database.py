@@ -98,6 +98,12 @@ MIGRATIONS = [
     );
     CREATE INDEX items_character ON items (character_id);
     """,
+    # roadmap M4: exp is the total the client keeps (it was the exp within the level), hotkeys of F3 30
+    """
+    UPDATE characters SET exp = exp + 10 * (level + 8) * (level - 1) * (level - 1)
+        + CASE WHEN level > 256 THEN 1000 * (level - 247) * (level - 256) * (level - 256) ELSE 0 END;
+    ALTER TABLE characters ADD COLUMN key_settings BLOB;
+    """,
 ]
 
 

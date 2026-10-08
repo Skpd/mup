@@ -17,6 +17,9 @@ from mup.packet.client_packet.magic_attack import MagicAttack as MagicAttack097
 from mup.packet.client_packet.magic_aoe import MagicAOE as MagicAOE097
 from mup.packet.client_packet.move_gate import MoveGate as MoveGate097
 from mup.packet.client_packet.map_ready import MapReady as MapReady097
+from mup.packet.client_packet.add_point import AddPoint as AddPoint097
+from mup.packet.client_packet.area_hits import AreaHits as AreaHits097
+from mup.packet.client_packet.key_settings import KeySettings as KeySettings097
 from mup.packet.client_packet.item import (PickUp as PickUp097, DropItem as DropItem097, MoveItem as MoveItem097,
                                            UseItem as UseItem097)
 
@@ -38,15 +41,17 @@ CMagicAttack = MagicAttack097
 CMagicAOE = MagicAOE097
 CMoveGate = MoveGate097
 CMapReady = MapReady097
+CAddPoint = AddPoint097
+CAreaHits = AreaHits097
+CKeySettings = KeySettings097
 CPickUp = PickUp097
 CDropItem = DropItem097
 CMoveItem = MoveItem097
 CUseItem = UseItem097
 
 # head, sub (None for packets without one) -> packet class
-# todo 0x1D area skill hits: skill index, x, y, serial, count, cids (roadmap M4)
 head_code_map = {(p.code[1], p.code[2] if len(p.code) > 2 else None): p for p in (
-    CChat, CMove, CAttack, CRotate, CPing, CMagicAttack, CMagicAOE, CMoveGate, CMapReady,
+    CChat, CMove, CAttack, CRotate, CPing, CMagicAttack, CMagicAOE, CMoveGate, CMapReady, CAddPoint, CAreaHits, CKeySettings,
     CServerList, CServerInfo,
     CLoginRequest, CClientClose, CLogout,
     CCharList, CCharCreate, CCharDelete, CJoinGame,

@@ -88,6 +88,7 @@ def spawn(game, mob, now):
     mob.life = mob.max_life
     mob.dead = False
     mob.target = None
+    mob.damage_by = {}
     mob.returning = False
     mob.path = []
     mob.respawn_at = None
@@ -101,6 +102,8 @@ def kill(game, mob, now):
     """mob died: it stays in view as a corpse until it respawns."""
     mob.dead = True
     mob.life = 0
+    mob.effects.clear()
+    mob.state = 0
     mob.target = None
     mob.path = []
     mob.respawn_at = now + mob.info.regen_time

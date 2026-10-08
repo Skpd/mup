@@ -16,6 +16,7 @@ def logout_handler(msg: CLogout, proto: BaseProtocol):
 
     logger.info('%s logs out, type %s', proto.acc.name, msg.type)
     if proto.player is not None:
+        proto.left = proto.player  # going to the server list the client sends its key settings after this
         proto.server.leave_world(proto)
     # closing the connection is up to the client, it does for types 0 and 2
     proto.write(SLogoutResult(type=msg.type))

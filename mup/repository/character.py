@@ -11,6 +11,7 @@ COLUMNS = {
     'level_up_points': 'free_points', 'str': 'strength', 'agi': 'agility', 'vit': 'vitality', 'ene': 'energy',
     'life': 'life', 'mana': 'mana', 'zen': 'zen', 'map': 'map_id', 'x': 'x', 'y': 'y', 'dir': 'direction',
     'pk_level': 'pk', 'pk_count': 'pk_count', 'ctl_code': 'role_code', 'quest_state': 'quest_state',
+    'key_settings': 'key_settings',
 }
 SAVED = [c for c in COLUMNS if c not in ('account_id', 'slot', 'name')]  # what changes in game
 ITEM_COLUMNS = ('level', 'durability', 'skill', 'luck', 'option', 'excellent')  # stored as the Item attributes
@@ -50,8 +51,9 @@ class CharacterRepository:
         if row is None:
             raise NotFoundError(name)
         p = self._player(row)
-        p.skills = [r['number'] for r in self.db.execute(
-            'SELECT number FROM skills WHERE character_id = ? ORDER BY slot', (p.id,))]
+        p.skills = []
+        for r in self.db.execute('SELECT slot, number FROM skills WHERE character_id = ? ORDER BY slot', (p.id,)):
+            p.skills += [None] * (r['slot'] - len(p.skills)) + [r['number']]  # a free slot stays free
         return p
 
     def last_item_serial(self):
@@ -80,10 +82,14 @@ class CharacterRepository:
             self._save_skills(p)
             self._save_items(p)
 
+    def save_key_settings(self, p: Player):
+        with self.db:
+            self.db.execute('UPDATE characters SET key_settings = ? WHERE id = ?', (p.key_settings, p.id))
+
     def _save_skills(self, p):
         self.db.execute('DELETE FROM skills WHERE character_id = ?', (p.id,))
         self.db.executemany('INSERT INTO skills (character_id, slot, number) VALUES (?, ?, ?)',
-                            [(p.id, slot, number) for slot, number in enumerate(p.skills)])
+                            [(p.id, slot, number) for slot, number in enumerate(p.skills) if number is not None])
 
     def _save_items(self, p):
         # an item that changed hands may still be stored with its last owner: REPLACE takes it over by its serial

@@ -24,6 +24,7 @@ class Config:
     monster_spawns: str = 'data/MonsterSetBase.txt'  # where they appear, only maps 0..10 are used
     item_info: str = 'data/Item.txt'  # which items drop, have a skill or options, server file of a later version
     item_drops: str = ''  # fixed drops per monster type on top of the random ones, none when empty
+    skill_info: str = 'data/Skill.txt'  # area radius, effect and classes of the skills, server file of a later version
     auto_create_accounts: bool = True  # the first login with an unknown account name creates it
     personal_code: str = '1111111'  # personal code of auto created accounts, deleting a character asks for it
     log_level: str = 'INFO'

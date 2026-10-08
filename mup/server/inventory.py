@@ -6,7 +6,7 @@ import logging
 from mup.model.item import (GRID, GRID_SIZE, RIGHT_HAND, LEFT_HAND, RING, RING2, WINGS, PET, BOLT, ARROWS, GLOW,
                             glow)
 from mup.packet.server import SInventory, SLookChange, SLife, SMana, SItemDeleted, SDurability
-from mup.server import item as items, view
+from mup.server import item as items, skill, stats, view
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,9 @@ def move(game, c, source, target):
     for slot in (source, target):
         if slot < GRID:
             look_changed(game, c, slot)
+    if source < GRID or target < GRID:
+        stats.update(c)
+        skill.update_weapon_skills(game, c)
     return True
 
 
@@ -129,6 +132,19 @@ def look_changed(game, c, slot):
         o.write(packet)
 
 
+def learn(game, c, item):
+    """c's player reads a scroll / orb: the class and requirements of the item, as for wearing it. False when it
+    can't or knows the skill."""
+    p = c.player
+    number = skill.taught_by(item)
+    r = items.requirements(item)
+    if (number not in game.skills or not class_allowed(p, item.info) or p.level < r.level or p.strength < r.strength
+            or p.agility < r.agility or p.energy < r.energy):
+        logger.info('%s can\'t learn skill %s from %s', p.name, number, item)
+        return False
+    return skill.learn(c, number)
+
+
 def use(game, c, slot):
     """
     c's player uses (right clicks) the item in slot: potions heal. The client locks item use until the answer, the
@@ -136,8 +152,15 @@ def use(game, c, slot):
     """
     p = c.player
     item = p.inventory.get(slot)
+    if not p.dead and item is not None and slot >= GRID and skill.taught_by(item) is not None:
+        if learn(game, c, item):
+            del p.inventory[slot]
+            c.write(SItemDeleted(slot=slot))
+        else:
+            c.write(SLife(type=SLife.UNLOCK, value=0))
+        return
     if p.dead or item is None or slot < GRID or not (item.type in items.HEALING or item.type in items.MANA):
-        # todo scrolls, orbs, jewels (roadmap M4, M5)
+        # todo jewels (roadmap M5)
         c.write(SLife(type=SLife.UNLOCK, value=0))
         return
 

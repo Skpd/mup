@@ -12,7 +12,7 @@ Packet codes are hex, details in `docs/protocol-097.md`. Where a code's meaning 
 | M1 persistence, character select flow | done |
 | M2 world: maps, gates, monsters | done |
 | M3 items | done |
-| M4 combat and progression | todo |
+| M4 combat and progression | done |
 | M5 NPCs, shops, warehouse, chaos machine | todo |
 | M6 social: whisper, party, trade | todo |
 | M7 guilds, quests, events, PK | todo |
@@ -238,18 +238,199 @@ Done:
 - Skills: data from `skill.bmd` / `Skill/Skill.txt` (mana, range, damage), learned from scrolls / orbs (`26`),
   area hits from the client's `1D` report instead of the server side guess, elf buffs, summons (`1F`), `1B` cancel,
   `F3 11` add / remove.
+- GM commands through chat (moved from M6: the manual tests from here on need levels, items and places).
+
+Done when: the character window shows the damage and defense the server uses, kills give exp by monster level and
+the exp bar is right across level ups, points go into stats, a wizard learns a skill from a scroll and an area skill
+hits what the client reported, an elf buffs another player.
+
+Steps (each leaves something that runs and is tested; after 4 is a stopping point if the session runs out):
+
+0. Reverse engineering into the doc (`DumpDecompiled.java` on the addresses, in the project `extract.sh` leaves):
+   - what the client derives from stats and equipment: the character window `0x4a20e0` (damage, defense, speeds,
+     magic damage, whatever it shows) and `0x45c9f0` (called by the `34` handler, reads 2 byte values at
+     `+0x46..+0x58b` of its argument, presumably the hero's recalculation). The server's formulas give what the
+     window shows; hit chance and the monster side stay the usual 0.97 ones, marked as such.
+   - `skill.bmd` (`Data/Local`, 2436 bytes: 64 records of 38 bytes + 4, xor `FC CF AB`, name in 32 bytes, then 6
+     bytes, mana 2 bytes at +34 going by Soldier Summon's 350, files): fields from its loader (`0x4c09b0`).
+   - casting: what the client checks before `19` / `1E` (mana, distance, level / energy), which skills send `1D`
+     (`0x442610` and its callers), reports per cast and what `[6]` counts. Effects: `19` `[6..7]` bit 15, `1B`
+     (`0x418500`, code: `[3]` skill, `[4..5]` cid, clears object `+0x76` bit 1 for skill 1 poison, 2 for 7 ice, 4 for
+     28 greater damage, 8 for 27 greater defense, `0x100` for 16 mana shield).
+   - learning: the answer to `26` on a scroll / orb (`F3 11` `FE`, `28`?), which item teaches which skill. Weapon
+     skills: does the client list an equipped weapon's skill itself or wait for `F3 11` `FE` / `FF`.
+   - teleport (skill 6): the request (usual: `1C` gate 0 with x, y in `[4]` `[5]`), answered with `1C` `[3]` 0.
+   - `1F` summons in view (`0x4172c0`, code: `[4]` count, entries from `[5]` start like `13`'s), the owner field.
+   - `F3 30` key settings: the server packet (`0x41ff50`) and the 18 byte request M1 found on every logout.
+   - excellent option texts (`Text.bmd` entries for ids `0x42..0x4f`, `0x45a270`), so options do what the tooltip
+     says.
+1. GM commands: chat lines starting with `/` from characters with the GM ctl code (`bin/account.py` sets it), in
+   `mup/server/command.py`: `/level`, `/zen`, `/item group index [level options]`, `/move map x y`, `/skill`,
+   answers as notices (`0D`). Housekeeping: split `play` in `tests/client.py` (400 lines) into one function per area
+   sharing servers and clients, before M4..M7 double it.
+2. Experience: total exp as the client keeps it (`16` adds to it, `F3 05` sets the next level's from
+   `10 (L + 9) L²`) instead of mup's exp per level, a migration adds the levels below to stored characters. Exp per
+   kill from monster and player level (usual 0.97 formula, times `exp_rate`), several level ups from one kill, `16`
+   split above 65535, the death loss from the level's share.
+3. Stats: `mup/server/stats.py` derives max life / mana, damage, magic damage, defense, attack / defense rate and
+   attack speed from class, level, stats and worn items (+ 3 per item level, options, excellent options; nothing from
+   items at durability 0 once M5 wears them), recomputed on stat, level and equipment changes. `F3 06` handler: one
+   point, result with the new max life / mana for vit / ene, at most 65535 (mup's choice, the client checks nothing).
+4. Hits: one hit function for every attacker / defender pair: hit chance from attack and defense rate (`15` with 0 is
+   a miss), defense, critical (luck), excellent (option), colour flags, for player -> monster and monster -> player,
+   replacing `10 + level` and the raw `Monster.txt` range. `15` requests: target in view and within the weapon's
+   reach, not faster than the attack speed (a few in a row allowed for lag, mup's choice), `0E` speeds compared with
+   the server's (logged). Bows / crossbows use an arrow / bolt per shot (`2A`, `28` for the last, no shot without).
+   Hits on players stay refused until PK (M7).
+5. Skills: `mup/server/skill.py` from `data/skill.bmd` (the client's) with `Skill.txt` for what it lacks (radius,
+   effect, classes). New characters start with their class's usual skills (energy ball for wizards) instead of
+   `DEFAULT_SKILLS`' test set, stored characters keep theirs. Scrolls (group 15) and orbs (12/7..14) through `26`:
+   class, level and energy checks, `F3 11` `FE`, the item used up. Weapon skills on equip / unequip if step 0 says
+   the server sends them.
+6. Casting: `19` / `1E` cost mana (`27`) and check range, damage from the skill plus magic damage (wizards) or weapon
+   damage (others, usual factors). Area skills hit what `1D` reports: targets in view within the skill's radius of
+   the reported point, one report per cast, replacing the 5 tile guess ("Differences with mup" 1). Poison and ice:
+   effect bits in `12` / `13`, poison damage over time, `1B` at the end. Teleport, defense (18), mana shield (16).
+7. Elf buffs and summons: heal (26), greater defense (27) / damage (28) on herself or another player for a while
+   (usual durations), effect bits in `12`, `1B` at the end, the bonus in `stats.py`. Summons (30..36): a monster
+   owned by the elf, `1F` in view, follows her, attacks what she attacks, gone when it or she dies, she leaves the map
+   or summons another.
+8. Key settings: `F3 30` stored per character (migration), sent back on join.
+9. Test (raw offsets): GM `/level` and `/item`, `F3 06` result, a kill's `16` against the formula and the total across
+   a level up (`F3 05`), hit damage within the range for the worn sword, a miss against a dodging test monster, arrows
+   counting down, a scroll from a fixed drop learned (`F3 11 FE`, `28`), mana spent (`27`), an area skill damaging
+   the monsters of a `1D` report and nothing else, a buff on B and its `1B`, skills, points and key settings after
+   relog. Then the real client: the window's numbers against the hits, each class's skills.
+
+Not in M4: hits on players (M7), durability loss and repair (M5), second class skills from quests (M7).
+
+Done:
+- Doc: [Character values](protocol-097.md#character-values) (the client's damage, wizardry damage, attack rate,
+  speeds, defense and defense rate, the wear factor, item values by level and excellent, option ids with their
+  `Text.bmd` texts) and [Skills](protocol-097.md#skills) (`skill.bmd`, a skill's wizardry damage, mana, what scrolls
+  and orbs teach), `16` bit 15, the `19` / `1D` / `1E` senders (the selected list index, `1D` at most 5 targets per
+  effect, several per cast), `1B`, `1F`, the teleport `1C`, `F3 30` both ways. All from code.
+- GM commands (`command.py`): `/level`, `/points`, `/zen`, `/item`, `/move`, `/skill`, `/heal` for accounts with
+  ctl code `0x20` (`bin/account.py gm`), answered with notices.
+- Exp (`experience.py`): the total exp the client keeps, migration 3 converts the stored characters. Kill exp by the
+  usual 0.97 formula, shared by the life each player took, in `16` (bit 15 for skill kills and the other players,
+  split above 65535), several level ups at once, death loss 2% of the level's span from level 10.
+- Stats (`stats.py`): `Player.values` by the client's formulas, recomputed on join, equipment, level and points.
+  `F3 06` with the client's result (stats up to 65535, mup's choice). What the client doesn't count, mup's way:
+  life / mana + 4% (`26` / `27` FE), damage decrease, reflect, life / mana after a kill, zen + 40%, excellent damage
+  10%, luck on weapons 5% critical, option `41` adds to the regeneration.
+- Hits (`combat.py`): the usual miss check (5% below the defense rate), critical (max) and excellent (120%),
+  defense, at least level / 10 (mup's), two weapons 55% each, the bow's hand, an arrow / bolt per shot (`2A`, `28`).
+  Reach 3 / 8 tiles and the pace (0.4 s / (1 + speed / 100), bursts of 4) are mup's, `0E` speeds that differ from
+  the server's are logged.
+- Skills (`skill.py`, `casting.py`, `effect.py`, `summon.py`): wizards start with energy ball, scrolls / orbs with
+  the item's requirements, weapon skills by the client's table while worn (`F3 11` FE / FF, free list slots stay
+  free). `19` and `1E` take mana, check the distance (+ 2 tiles) and the pace; area skills hit only what `1D`
+  reports within the radius (+ 2) of the cast, once per effect serial, for 3 s. Knights' weapon skills hit for the
+  weapon times 200 + ene / 10 %. Poison (3% of life every 2 s for 10 s), ice (half speed for 10 s), `1B` at the end;
+  heal 5 + ene / 5, greater defense 2 + ene / 8 and damage 3 + ene / 7 for 60 s (usual), the knight's defense
+  halves the damage for 3 s (mup's). Teleport `1C 0 x y`, `11` to the players who see it. Summons 30..36 (the usual
+  monster types) follow the elf and attack what she attacks, `1F` in view, gone with death, map change and logout;
+  monsters ignore them and players can't hit them (mup's).
+- Key settings `F3 30` stored with the character (also when they come after a logout to the server list), sent
+  back after the skill list.
+- Test: split into one function per area. GM commands, `F3 06`, exp shares in `16`, damage within the formulas'
+  ranges, mana, a scroll read and one refused, flame hitting what `1D` reports and nothing else, poison ending with
+  `1B`, a teleport the other player sees, a shield's skill on and off, skills and hotkeys after relog, an elf's
+  buff on B, arrows counting down, misses against a dodging monster, a summon in `1F` attacking with the elf.
+- Left: mana shield and the other second class skills (M7), the client's own attack / cast timing (the pace is a
+  guess), the monsters' magic defense column, the wings' damage / absorb % (not in this client's values).
 
 ## M5 NPCs, shops, warehouse, chaos machine
 
 - NPC spawns, talk `30` (result must be C3), shops `31`..`34` from `Shop/*.txt`, repair.
 - Warehouse `81`..`83`. Chaos machine `86` / `87`, basic mixes.
+- Durability loss (`2A`) and jewels (bless, soul, life), left out of M3.
+
+Done when: in the real client, buy potions and a weapon, sell an item, repair a worn one, store an item and zen in the
+warehouse and take them out with another character of the account, a jewel of bless, a +10 mix.
+
+Steps:
+
+0. Reverse engineering into the doc:
+   - NPCs: the types this client knows (`NpcName(Eng).txt`: traps 100..103, 200, 235..255; models `0x4bc4d0`), only
+     234 and up can be talked to. The later server's section 0 spawns 226, 229, 230, 233, 257, 375, 379, 450, 451 on
+     maps 0..10, not in this client.
+   - `30` talk result (`0x41abc0`, must be C3): `[3]` the window per NPC (shop, warehouse, chaos machine, guild
+     master, Charon, ...), what the client sends or expects after it.
+   - `31` lists (`0x414890`, code: `[4]` 3 the chaos machine's 8 x 4 grid, anything else the 120 slot (8 x 15) shop /
+     warehouse grid via `0x48d3b0`, `[5]` count, 5 bytes per entry: slot, item). The `31` request closes (M1).
+   - shop: the buy request (not in the sender index, the shop window's click code), `32` result (`0x48d940`), sell
+     `33` (request from `0x497760`, an item dropped on the shop), repair `34` (request `0x4a19f0`). How the client's
+     money changes after each, and **the prices the client shows** (buy, sell, repair), so the server charges them.
+   - warehouse: `81` (`0x41d970`, request `0x4232c0`, usual: zen in / out), `82` (`0x41dbe0`, request `0x4aa5c0`,
+     usual: close), `83` (`0x41dc30`); `24` with window 2.
+   - chaos machine: `86` (`0x41f960`), `87` (`0x41fa20`, request `0x4aa3a0`), the mix request, what the client shows
+     of a mix (rate, zen) before it sends.
+   - jewels: how the client applies bless / soul / life (`26` with the target slot `[4]`, or `24`), the answer that
+     unlocks item use. Durability: what the client does at 0, which `2A` it expects.
+1. NPCs: `MonsterSetBase.txt` section 0 on maps 0..10, the client's types only, ids in the monster range, in view with
+   `13`, at their spot and direction. Not attackable, no AI except traps 100..103 (hit who stands on them, usual);
+   guards stand until M7.
+2. Talk: `30` with the NPC in view and near (mup's choice), the window per NPC type, `C3 30`, the open window kept on
+   the connection, closed by `31`, walking away, a map change, death and logout. One window at a time.
+3. Shops: the later server's `Shop/*.txt` and `ShopManager.txt` copied to `data/shop/`, items this client has, placed
+   by size in the 8 x 15 grid (file order unless step 0 finds a rule), `31` after `30`. Buy: price, money, a free
+   slot, a new item with a serial and full durability. Sell: the client's price, the item gone, money capped.
+4. Durability and repair: weapons wear on hits, armor and shields on hits taken (usual rates), `2A`, no stats at 0
+   (`stats.py`). Repair at the blacksmith and in the inventory (usual: dearer), `34`.
+5. Warehouse: per account, items with owner `warehouse` and `warehouses.zen` (M1 tables), loaded on first open, `31`
+   with its items, `24` between windows 0 and 2 (grid fit as in the inventory), `81` zen in / out, saved with the
+   character in one transaction on close, logout and autosave, so nothing is duplicated or lost.
+6. Jewels: bless +1..+6, soul +7..+9 (50%, more with luck, a failure drops the level), life adds an option (usual 0.97
+   rates), the way step 0 found.
+7. Chaos machine: the chaos goblin's window, `24` with window 3 (8 x 4), items left in it go back on close and logout.
+   Mix: the recipe from the items, zen, chance, the result or the items lost, then its `31`. Item +10 / +11, chaos
+   weapons, Dinorant from ten Horns of Uniria, first wings (usual recipes and rates from a data file, so the test
+   config can make them certain). The Devil Square invitation comes with M7.
+8. Test (raw offsets): talk to the potion girl (C3 `30`, `31`), buy a potion (money, slot), refused buys (no money, no
+   room), sell it, durability after hits (`2A`), repair (`34`, money), store an item and zen and take them with
+   another character of the account, also after a restart, a jewel of bless (+1), a certain +10 mix. Then the real
+   client.
+
+Not in M5: shops refusing murderers (M7).
 
 ## M6 social: whisper, party, trade
 
 - Whisper `02` / `0C` (usual), confirm the client chat layout `00` (not reviewed yet).
 - Party `40`..`44`: invite, list, member life, exp share.
 - Trade `36`..`3D`.
-- GM commands through chat.
+- GM commands through chat: moved to M4.
+
+Done when: two real clients whisper, party up and share the exp of a kill, and trade an item and zen.
+
+Steps:
+
+0. Reverse engineering into the doc:
+   - chat: the client's `00` (senders `0x41f0e0`, `0x4d2b21`, handler `0x414960`), the whisper request (not in the
+     sender index, near the chat input), `02` whisper (`0x45e470`), `0C` (`0x45e860`, usual: not online). `01`, `03`,
+     `0B` from the backlog if they turn out chat related.
+   - party: request `40` (`0x46a340`), the question `40` (inline at `0x422231`), the answer (not in the index), `41`
+     results 0..5, `42` list (`0x41de50`), `43` leave / kick (request `0x49c5b0`), `44` member life (inline at
+     `0x422300`), the party window `0x4a44e0`.
+   - trade: request `36` (`0x46a340`), the question `36` (its handler builds a packet itself: an answer when busy?),
+     the answer `37` (not in the index) and its result (`0x41d1b0`), the other side's items `38` / `39` (`0x48e0d0` /
+     `0x48d940`), money `3A` / `3B`, ok `3C` (`0x497760`, `0x4a1070`), end `3D` (`0x41d6f0`, request `0x4a1070`),
+     `24` with window 1 (8 x 4).
+1. Chat: `00` fixed if it differs, whisper by name on any map, `0C` when the name isn't in game, the prefixes the
+   client shows (`~` party in step 2, `@` guild in M7), server messages as notices (`0D`).
+2. Party (`mup/server/party.py`, in memory): invite a player in view, accept / refuse, at most 5 (usual), leave, kick
+   by the leader, gone when one is left; `42` to every member on each change, `44` every few seconds, party chat `~`.
+   Exp share: members on the map within view of the kill split it by level with a bonus per member (usual 0.97
+   formula, mup's choice where unknown), `16` to each. Logout and disconnect leave the party.
+3. Trade (`mup/server/trade.py`, in memory): request to a player in view, neither busy (window or trade open), answer,
+   an 8 x 4 grid per side, `24` window 1 moves, `38` / `39` and the money to the other, ok `3C`, any change clears
+   both oks. Both ok: room in both inventories, items and zen swapped at once, both characters saved in one
+   transaction (items move by serial already), `3D`, `F3 10` and money to both. Cancel, walking away, death and
+   disconnect give everything back. A `trades` table (migration) logs each trade for B2's market memory.
+4. Test (raw offsets): A whispers B and an offline name (`0C`), party invite and accept with `42` on both, party chat,
+   A's kill gives B exp (`16`), leave; trade: request, accept, A puts in the sword and zen, a change resets the oks,
+   both ok, the sword is B's after a restart, a cancelled trade gives A its items back. Then two real clients.
 
 ## M7 guilds, quests, events, PK
 
@@ -257,6 +438,54 @@ Done:
 - Second class quests `A0`..`A3` (client `quest.bmd`).
 - Devil Square `90`..`96`, `99`.
 - PK: levels, timers, item drop on death.
+
+Four features: PK and quests in one session, guilds and Devil Square in another if one isn't enough.
+
+Done when: in the real client a murderer changes colour and drops an item when killed, a level 150 character (GM
+`/level`) does Sevina's two quests and comes back a soul master / blade knight / muse elf, a guild with a mark gets a
+second member, a Devil Square round runs from entry to the ranking.
+
+Steps:
+
+0. Reverse engineering into the doc:
+   - PK: `F3 08` (`0x41c2b0`, code: `[4..5]` cid BE, `[6]` pk level stored at object `+0x2b9`, 6 and up sets
+     `+0x18e`; the name colour per level), how the client attacks a player (which `15` / `19` it sends at a player
+     cid, a modifier key?).
+   - quests: the rest of [Quest window](#quest-window): when the client asks for `A0`, what the dialogs (`Dialog.bmd`
+     50..73) say each quest gives. `Quest.bmd` (files): quest 0 wants 14/23 from dark wizards, knights and elves,
+     level 150 and 1 000 000 zen (magic gladiators: a level 10000 requirement, so never); quest 1 wants 14/24 (knights),
+     14/25 (elves), 14/26 (wizards) and 2 000 000 zen.
+   - guilds: `50` (inline), `51` (`0x41df50`), `52` (inline), `53` (`0x41e110`), `54`, `55` (`0x45d160`), `56`
+     (`0x41ea70`), `5A` (`0x41e8b0`), `5B` (`0x41e900`), `5C` (`0x41e750`), `5D` (`0x41e860`), war `60`..`64`; the
+     requests (`50` from `0x46a340`, the create request with the name and the 32 byte mark), the guild master's
+     window (`30` result for NPC 241).
+   - Devil Square: `90` (`0x41fa70`, request `0x49d500`), `91` (`0x41fec0`), `92` (`0x45d100`), `93` (`0x41ff30`),
+     `94`..`96`, `99`, the requests `97` / `98` (`0x49dff0`), Charon's (237) window, the invitation 14/19 (from the
+     eye 14/17 and key 14/18), gates 58..61.
+1. PK: hits on players with M4's formulas outside safe zones. Killing a player who isn't a murderer and didn't attack
+   first raises the pk count, the pk level follows it (usual steps), attacking back is self defense for a while
+   (usual), `F3 08` to the viewers, the level in `12` `[+30]` and `F3 03` `[40]`, saved (`pk_level`, `pk_count`). The
+   count goes down with time in game (mup's choice), murderers drop an item on death (usual chance), shops refuse them
+   and guards (M5 NPCs) attack them. No pk count in the Arena (map 6).
+2. Quests: `data/Quest.bmd` (the client's), states in `characters.quest_state` at the bit positions the client reads
+   (doc). Sevina (235): `30` answered with `A0` / `A1` instead of a window, `A2` proceed: level, zen and the quest item
+   checked and taken, the new state, `A2` result. Rewards with `A3`: `C8` level up points, `C9` the class change
+   (second class `CharacterClass`, saved, in `F3 00`, `12` `[+4]` and `F3 03`), after which second class items and
+   skills (M3 / M4 checks) open. Quest items drop only for a character with the quest in progress (usual monsters).
+3. Guilds: `guilds` / `guild_members` (M1, a migration for what's missing), create at the guild master (level, name
+   rules, mark), join by asking a guild master in view, leave, kick, disband by the master, member list `52`, the guild
+   of players in view (`5B`, `5C` with the mark), guild chat `@`, loaded on start and kept in memory. Guild war
+   (`60`..`64`) last, if there is time.
+4. Devil Square: a schedule from the config, Charon's window, the square by level and invitation (usual 0.97 four
+   squares, magic gladiators lower), `90` entry, map 9 through its gates, monster waves (the later server's event
+   sections for map 9 or mup's table, M2 left them out), the timer packets, a score per kill, at the end the ranking
+   `93`, exp / zen by score, everyone back to town. The invitation mix in the chaos machine (M5 step 7).
+5. Test (raw offsets): A kills B outside town (`17`, `F3 08` to both, the pk level in `F3 03` after relog, an item
+   dropped); B's quests through GM commands (`A0`, `A1`, `A2` with the item and zen taken, `A3` class change, the
+   class in the character list); B joins A's guild (both see `5B`); a Devil Square round on a short test schedule:
+   entry, a kill's score, the ranking. Then the real client.
+
+Not in M7: Blood Castle, Chaos Castle and the other later events, guild alliances, duels.
 
 ## Bots
 

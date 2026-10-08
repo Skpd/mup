@@ -27,6 +27,7 @@ class BaseProtocol(Protocol):
     playing = False
     server_tick = None
     client_tick = None
+    reported_speeds = None  # attack and magic speed of the last ping
     view = None  # players, monsters and ground items this client has in view (mup.server.view)
 
     def __init__(self, gs):
@@ -36,6 +37,10 @@ class BaseProtocol(Protocol):
         self.buffer = bytearray()
         self.logger = logger
         self.view = set()
+        self.area_casts = {}  # skill number -> mup.server.casting.AreaCast
+        self.teleport_at = 0.0  # the next teleport is allowed then
+        self.left = None  # the character it logged out of
+        self.summon = None  # the player's summoned monster, mup.server.summon
 
     @property
     def tag(self):

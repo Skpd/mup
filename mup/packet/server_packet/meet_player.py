@@ -25,4 +25,5 @@ class MeetPlayer(Packet):
         return cls(entries=[{
             'cid': c, 'x': p.x, 'y': p.y, 'class_pose': p.class_type.value, 'equipment': equipment(p),
             'name': p.name, 'target_x': p.x, 'target_y': p.y, 'direction_pk': p.direction << 4 | p.pk,
+            'effects': p.state & 0xFF, 'effects2': p.state >> 8 & 0x01,
         } for c, p in players])

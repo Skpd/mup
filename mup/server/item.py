@@ -104,3 +104,48 @@ def requirements(item):
     if level and item.excellent:
         level += 20
     return Requirements(level, strength, stat(i.agility, 3, 100), energy)
+
+
+def level_bonus(level):
+    """What damage, defense rate and defense grow by with the item level: 3 per level up to 9, 4 for level 10, 5 for
+    each level above (client 0x45a270)."""
+    return 3 * min(level, 9) + (4 + 5 * (level - 10) if level >= 10 else 0)
+
+
+def max_durability(item):
+    """
+    Full durability as the client's durability factor counts it (0x45baf0): item.bmd's (the magic durability for
+    staffs), + 1 per item level up to 4 and 2 per level above, + 15 for excellent items. Items without one (potions,
+    jewels) are counted, a new one is 1.
+    """
+    i = item.info
+    base = i.durability or i.magic_durability
+    if not base:
+        return 1
+    if item.type in (BOLT, ARROWS):
+        return base
+    return min(0xFF, base + min(item.level, 4) + 2 * max(0, item.level - 4) + (15 if item.excellent else 0))
+
+
+def wear_factor(item, base=None):
+    """The share of an item's values lost to wear (client 0x45baf0): 50% above 80% worn, 30% above 70%, 20% above
+    50%, nothing below. worn is 1 - durability / maximum, the maximum counted from item.bmd's durability (base: the
+    magic durability for a staff's wizardry)."""
+    i = item.info
+    base = i.durability if base is None else base
+    full = base + min(item.level, 4) + 2 * max(0, item.level - 4) + (15 if item.excellent else 0)
+    if full <= 0:
+        return 0.0
+    worn = 1 - item.durability / full
+    if worn > 0.8:
+        return 0.5
+    if worn > 0.7:
+        return 0.3
+    if worn <= 0.5:
+        return 0.0
+    return 0.2
+
+
+def worn(value, factor):
+    """value after the wear factor, the client's integer arithmetic."""
+    return value - int(value * factor)

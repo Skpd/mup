@@ -4,7 +4,7 @@ that comes within view range, attack it within attack range, return when it is l
 """
 import random
 from mup.packet.server import SAction
-from mup.server import combat, view
+from mup.server import combat, effect, summon, view
 from mup.server.path import direction, find_path
 from mup.server.world import VIEW_RANGE, distance
 
@@ -27,6 +27,9 @@ def tick(game, m, now):
 
 def update(game, mob, now):
     if mob.dead:
+        return
+    if mob.owner is not None:
+        summon_update(game, mob, now)
         return
     if mob.path and now >= mob.next_step_at:
         step(game, mob, now)
@@ -106,7 +109,7 @@ def attack(game, mob, c, now):
     for o in view.viewers(game, mob):
         o.write(action)
     mob.next_attack_at = now + mob.info.attack_speed / 1000
-    combat.hit_player(game, mob, c, random.randint(mob.info.damage_min, mob.info.damage_max))
+    combat.monster_attack(game, mob, c)
 
 
 def go_home(game, mob, now):
@@ -165,4 +168,63 @@ def step(game, mob, now):
     mob.path.pop(0)
     m.move_monster(mob, x, y)
     view.monster_moved(game, mob)
-    mob.next_step_at = now + mob.info.move_speed / 1000
+    mob.next_step_at = now + mob.info.move_speed / 1000 * (2 if effect.ICE in mob.effects else 1)
+
+
+FOLLOW = 2  # tiles a summon keeps from its owner
+SUMMON_THINK = 0.3
+
+
+def summon_update(game, mob, now):
+    """A summon's turn: it goes for its target near its owner, otherwise follows the owner."""
+    c = mob.owner
+    p = c.player
+    if p is None or p.dead or p.map_id != mob.map_id or c.summon is not mob:
+        if c.summon is mob:
+            summon.dismiss(game, c)
+        else:
+            summon.gone(game, mob)
+        return
+    if mob.path and now >= mob.next_step_at:
+        step(game, mob, now)
+    if now < mob.next_think_at or mob.path:
+        return
+    mob.next_think_at = now + SUMMON_THINK
+
+    t = mob.target
+    if t is not None and (t.dead or t.map_id != mob.map_id or distance(t.x, t.y, p.x, p.y) > summon.GUARD):
+        mob.target = t = None
+    if t is not None:
+        if distance(mob.x, mob.y, t.x, t.y) <= mob.info.attack_range:
+            if now >= mob.next_attack_at:
+                summon_attack(game, mob, t, now)
+            return
+        summon_walk(game, mob, (t.x, t.y), mob.info.attack_range, now)
+    elif distance(mob.x, mob.y, p.x, p.y) > FOLLOW:
+        summon_walk(game, mob, (p.x, p.y), FOLLOW, now)
+
+
+def summon_walk(game, mob, goal, reach, now):
+    m = game.maps[mob.map_id]
+    path = find_path(m.monster_can_stand, (mob.x, mob.y), goal, reach=reach, max_steps=summon.GUARD * 2)
+    if path:
+        walk(game, mob, path[:CHASE_STEPS * 2], now)
+
+
+def summon_attack(game, mob, target, now):
+    """A summon hits a monster like a monster hits a player: miss check, its damage less the defense. The damage
+    counts as its owner's."""
+    facing = direction(target.x - mob.x, target.y - mob.y)
+    if facing is not None:
+        mob.direction = facing
+    action = SAction(cid=mob.cid, direction=mob.direction, action=ATTACK, target=target.cid)
+    for o in view.viewers(game, mob):
+        o.write(action)
+    mob.next_attack_at = now + mob.info.attack_speed / 1000
+    i = mob.info
+    dmg = 0
+    if combat.hit_check(i.attack_rate, target.info.defense_rate):
+        dmg = max(random.randint(i.damage_min, i.damage_max) - target.info.defense, combat.minimum_damage(i.level))
+    combat.hit_monster(mob.owner, target, dmg, magic=True)
+    if target.dead:
+        mob.target = None

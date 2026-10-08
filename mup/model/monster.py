@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -46,11 +46,14 @@ class Monster:
     y: int = 0
     direction: int = 0
     life: int = 0
-    state: int = 0  # effects bits of the monsters in view packet
+    state: int = 0  # effects bits of the monsters in view packet, mup.server.effect
+    effects: Dict[int, object] = field(default_factory=dict)  # skill number -> mup.server.effect.Effect
     dead: bool = True  # until spawned
     home: Tuple[int, int] = (0, 0)  # where it spawned, it wanders around it and returns to it
     # ai, times are the game clock (GameServer.now)
-    target: object = None  # connection it chases
+    target: object = None  # connection it chases, a summon's: the monster it goes for
+    owner: object = None  # a summon's connection, mup.server.summon
+    damage_by: Dict[object, int] = field(default_factory=dict)  # connection -> life it took, shares the exp
     returning: bool = False
     path: List[Tuple[int, int]] = field(default_factory=list)  # tiles still to walk
     next_step_at: float = 0.0
