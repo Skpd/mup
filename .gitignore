@@ -4,3 +4,6 @@ venv
 client
 logs/*
 mu.pth
+*.db
+*.db-wal
+*.db-shm

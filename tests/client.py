@@ -4,10 +4,12 @@ client does (same keys, encryption, xor and packet layouts, see docs/protocol-09
 
 usage: ./venv/bin/python tests/client.py
 Exits non zero on the first failed check and prints the end of the server logs.
-The servers run with their own config on ports 44415 and 55911, so the test can run next to the usual servers.
+The servers run with their own config on ports 44415 and 55911 and a database in a temporary directory, so the test
+can run next to the usual servers.
 """
 import os
 import socket
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -25,15 +27,36 @@ from mup.packet.server import SDamage  # noqa: E402
 HOST = '127.0.0.1'
 CS_PORT = 44415
 GS_PORT = 55911
+PERSONAL_CODE = '4321'
 CONFIG = """
 [network]
 cs_port = {}
 gs_port = {}
 gs_host = {}
+[database]
+db_path = {{}}
+autosave_interval = 2
+[accounts]
+personal_code = {}
 [log]
 log_level = DEBUG
 log_packets = yes
-""".format(CS_PORT, GS_PORT, HOST)
+""".format(CS_PORT, GS_PORT, HOST, PERSONAL_CODE)
+
+# x, y step of each walk direction
+STEPS = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)]
+# start areas: Lorencia gate 17, Noria gate 27 for elves (Move/Gate.txt)
+LORENCIA = (0, range(133, 152), range(118, 136))
+NORIA = (3, range(171, 178), range(108, 118))
+# where A and B stand for the tests in view: outside the east exit of Lorencia, next to the spiders the server puts
+# there (x 177..185, y 124..128). The walks from here stay on walkable tiles outside the safe zone
+A_SPOT = (180, 127)
+B_SPOT = (178, 126)
+# create class (class number << 2) -> str, agi, vit, ene, life, mana (DefaultClassInfo.txt)
+CLASS_STATS = {0: (18, 18, 15, 30, 60, 60), 16: (28, 20, 25, 10, 110, 20), 32: (22, 25, 20, 15, 80, 30)}
+# character info [4..41]
+INFO_FIELDS = ('x', 'y', 'map', 'dir', 'exp', 'next_exp', 'points', 'str', 'agi', 'vit', 'ene', 'life', 'max_life',
+               'mana', 'max_mana', 'money', 'pk', 'ctl')
 
 
 class ClientCrypt(Crypt):
@@ -76,6 +99,7 @@ class Conn:
         self.send_raw(self.build(data, encrypt))
 
     def _read_packet(self, timeout):
+        """Next packet, C3/C4 decrypted. .encrypted tells how it arrived."""
         self.s.settimeout(timeout)
         while True:
             if self.buf:
@@ -85,8 +109,10 @@ class Conn:
                     if len(self.buf) >= size:
                         p = Base(self.buf[:size])
                         del self.buf[:size]
-                        if p[0] in (0xC3, 0xC4):
+                        encrypted = p[0] in (0xC3, 0xC4)
+                        if encrypted:
                             p = self.crypt.decrypt(p)
+                        p.encrypted = encrypted
                         return p
             chunk = self.s.recv(65536)
             if not chunk:
@@ -130,6 +156,10 @@ def name10(s):
     return list(s.encode().ljust(10, b'\0'))
 
 
+def text(data):
+    return bytes(data).split(b'\0', 1)[0].decode()
+
+
 def check(cond, msg):
     if not cond:
         raise AssertionError(msg)
@@ -144,13 +174,34 @@ def walk(x, y, steps, direction):
     return [0xC1, 0, 0x10, x, y, direction << 4 | len(steps), *path]
 
 
+def walk_to(conn, start, target):
+    """Walks straight (diagonals first) from start to target, at most 15 steps per request."""
+    (x, y), steps = start, []
+    while (x, y) != target:
+        dx, dy = (target[0] > x) - (target[0] < x), (target[1] > y) - (target[1] < y)
+        steps.append(STEPS.index((dx, dy)))
+        x, y = x + dx, y + dy
+    x, y = start
+    for i in range(0, len(steps), 15):
+        part = steps[i:i + 15]
+        conn.send(walk(x, y, part, part[-1]))
+        for d in part:
+            x, y = x + STEPS[d][0], y + STEPS[d][1]
+    return target
+
+
+def in_area(info, area):
+    map_id, xs, ys = area
+    return info['map'] == map_id and info['x'] in xs and info['y'] in ys
+
+
 def damage(p):
     """Damage value of a 0x15 packet, the top 3 bits are colour flags."""
     return (p[5] & 0x1F) << 8 | p[6]
 
 
-def login_and_enter(account, password, char_name, class_type=0, create=True):
-    """class_type as the create screen sends it: class number << 2 (0 dw, 16 dk, 32 elf, 48 mg)"""
+def login(account, password):
+    """Connect server, then login on the game server. Returns the game server connection and the login result."""
     cs = Conn(CS_PORT, 'cs-' + account)
     p = cs.recv_until(key(0x00, 0x01), what='hello')
     check(bytes(p) == bytes([0xC1, 0x04, 0x00, 0x01]), 'cs hello')
@@ -174,43 +225,70 @@ def login_and_enter(account, password, char_name, class_type=0, create=True):
     gs.send([0xC1, 0, 0xF1, 0x01, *name10(account), *name10(password), *tick, *b'09704', *b'muonlineonpython'],
             encrypt=True)
     p = gs.recv_until(key(0xF1, 0x01), what='login result')
-    if p[4] != 1:
-        return gs, p[4]
-    check(True, 'login ok')
-    gs.joined = True
+    if p[4] == 1:
+        gs.joined = True
+    return gs, p[4]
 
+
+def login_ok(account, password):
+    gs, result = login(account, password)
+    check(result == 1, 'login ' + account)
+    return gs
+
+
+def char_list(gs):
+    """Character list entries, 26 bytes each."""
     gs.send([0xC1, 0, 0xF3, 0x00])
     p = gs.recv_until(key(0xF3, 0x00), what='char list')
-    if create:
-        check(p[4] == 0, 'empty char list')
-        gs.send([0xC1, 0, 0xF3, 0x01, *name10(char_name), class_type])
-        p = gs.recv_until(key(0xF3, 0x01), what='char created')
-        check(p[4] == 1 and bytes(p[5:15]).rstrip(b'\0').decode() == char_name and p[15] == 0,
-              'char created: ' + p.hex(' '))
-        gs.send([0xC1, 0, 0xF3, 0x00])
-        p = gs.recv_until(key(0xF3, 0x00), what='char list 2')
-        check(p[4] == 1 and len(p) == 5 + 26, 'char list has 1 entry of 26 bytes')
-        e = p[5:]
-        check(e[0] == 0 and bytes(e[1:11]).rstrip(b'\0').decode() == char_name and e[12] | e[13] << 8 == 1
-              and e[15] == class_type << 1 and bytes(e[16:26]) == bytes([0xFF] * 5 + [0, 0, 0, 0xF8, 0]),
-              'char list entry ' + e.hex(' '))
+    check(len(p) == 5 + 26 * p[4], 'char list: {} entries of 26 bytes'.format(p[4]))
+    return [p[5 + i * 26:5 + (i + 1) * 26] for i in range(p[4])]
 
+
+def create(gs, char_name, class_type):
+    """class_type as the create screen sends it: class number << 2 (0 dw, 16 dk, 32 elf, 48 mg)"""
+    gs.send([0xC1, 0, 0xF3, 0x01, *name10(char_name), class_type])
+    return gs.recv_until(key(0xF3, 0x01), what='char created')
+
+
+def delete(gs, char_name, code):
+    gs.send([0xC1, 0, 0xF3, 0x02, *name10(char_name), *name10(code)])
+    return gs.recv_until(key(0xF3, 0x02), what='char deleted')[4]
+
+
+def enter(gs, char_name):
+    """Enters the game, returns the character info fields and the skill numbers."""
     gs.send([0xC1, 0, 0xF3, 0x03, *name10(char_name)])
     p = gs.recv_until(key(0xF3, 0x03), what='char info')
-    x, y, map_id, _, exp, next_exp = struct.unpack('<4B2I', bytes(p[4:16]))
-    check(not create or (x, y, map_id, exp, next_exp) == (128, 188, 0, 0, 100),
-          'char info x{} y{} map{} exp {}/{}'.format(x, y, map_id, exp, next_exp))
-    money, pk_level, ctl = struct.unpack('<I2B', bytes(p[36:42]))
-    check(len(p) == 42 and (money, pk_level, ctl) == (31337, 3, 0),
-          'char info is 42 bytes, money {} at 36, pk level {} at 40, ctl {} at 41'.format(money, pk_level, ctl))
+    check(p.encrypted and len(p) == 42, 'char info is encrypted, 42 bytes')
+    info = dict(zip(INFO_FIELDS, struct.unpack('<4B2I9H2xI2B', bytes(p[4:42]))))
     gs.recv_until(key(0xF3, 0x10), what='inventory')
     p = gs.recv_until(of(0x12, gs.cid, at=5), what='meet self')
-    check(p[4] == 1 and len(p) == 5 + 32 and bytes(p[23:33]).rstrip(b'\0').decode() == char_name,
-          'meet self, one 32 byte entry, name at entry + 18')
+    check(p[4] == 1 and len(p) == 5 + 32 and text(p[23:33]) == char_name, 'meet self, one 32 byte entry, name at entry + 18')
     p = gs.recv_until(key(0xF3, 0x11), what='skill list')
-    print('  skills', [p[5 + i * 3 + 1] for i in range(p[4])])
+    info['skills'] = [p[5 + i * 3 + 1] for i in range(p[4])]
     check(not any(p.head == 0x0F for p in gs.inbox), 'no weather packet on join')
-    return gs, 1
+    print('  {} at {},{} map {}, exp {}/{}, skills {}'.format(
+        char_name, info['x'], info['y'], info['map'], info['exp'], info['next_exp'], info['skills']))
+    return info
+
+
+def check_new_character(info, class_type, area):
+    s, a, v, e, life, mana = CLASS_STATS[class_type]
+    check(in_area(info, area), 'starts at {},{} on map {}, in its start area'.format(info['x'], info['y'], info['map']))
+    check((info['exp'], info['next_exp'], info['points']) == (0, 100, 0), 'exp 0 of 100, no level up points')
+    check((info['str'], info['agi'], info['vit'], info['ene']) == (s, a, v, e),
+          'class base stats str {} agi {} vit {} ene {}'.format(s, a, v, e))
+    check((info['life'], info['max_life'], info['mana'], info['max_mana']) == (life, life, mana, mana),
+          'full life {} and mana {}'.format(life, mana))
+    check((info['money'], info['pk'], info['ctl']) == (0, 3, 0), 'no zen, pk level 3 (commoner), ctl 0')
+
+
+def logout(gs, kind):
+    """F1 02 logout request, kind: 0 close, 1 character select, 2 server select. Returns the result packet."""
+    gs.send([0xC1, 0, 0xF1, 0x02, kind], encrypt=True)
+    p = gs.recv_until(key(0xF1, 0x02), what='logout result')
+    gs.inbox.clear()
+    return p
 
 
 def check_server_code():
@@ -235,7 +313,7 @@ def check_packets():
     check(p[5] == 0x5F and p[6] == 0xFF, 'damage 9000 shows the 13 bit maximum 8191, green flag: ' + p.hex(' '))
 
 
-def play():
+def play(servers, db_path):
     print('packets')
     check_packets()
 
@@ -243,54 +321,76 @@ def play():
     check_server_code()
 
     print('player A (dark wizard)')
-    a, _ = login_and_enter('alice', 'pw1', 'Alice', 0)
+    a = login_ok('alice', 'pw1')
+    check(char_list(a) == [], 'empty char list')
+    p = create(a, 'Alice', 0)
+    check(p[4] == 1 and text(p[5:15]) == 'Alice' and p[15] == 0, 'char created in slot 0: ' + p.hex(' '))
+    e = char_list(a)[0]
+    check(e[0] == 0 and text(e[1:11]) == 'Alice' and e[12] | e[13] << 8 == 1 and e[15] == 0
+          and bytes(e[16:26]) == bytes([0xFF] * 5 + [0, 0, 0, 0xF8, 0]), 'char list entry ' + e.hex(' '))
+    info = enter(a, 'Alice')
+    check_new_character(info, 0, LORENCIA)
+    check(info['skills'][:1] == [17], 'energy ball is the first skill')
+    walk_to(a, (info['x'], info['y']), A_SPOT)
     p = a.recv_until(key(0x13), what='meet monster')
     mob = p[5] << 8 | p[6]
     mob_xy = (p[11], p[12])
-    check(mob == 0x0F and p[7] == 6 and mob_xy == (127, 189), 'meet monster cid {} type {} at {}'.format(mob, p[7], mob_xy))
+    check(p[7] == 3, 'meet a spider outside the east exit: cid {} type {} at {}'.format(mob, p[7], mob_xy))
 
-    print('wrong password')
-    bad, res = login_and_enter('alice', 'nope', 'Alice', create=False)
+    print('wrong password, account in use')
+    bad, res = login('alice', 'nope')
     check(res == 0, 'bad password rejected')
+    bad.s.close()
+    bad, res = login('alice', 'pw1')
+    check(res == 3, 'second login of an account in game: in use')
     bad.s.close()
 
     print('player B (dark knight)')
-    b, _ = login_and_enter('bob', 'pw2', 'Bobby', 16)
+    b = login_ok('bob', 'pw2')
+    p = create(b, 'Bobby', 16)
+    check(p[4] == 1 and p[15] == 0, 'char created')
+    check(char_list(b)[0][15] == 32, 'char list class byte 32')
+    info = enter(b, 'Bobby')
+    check_new_character(info, 16, LORENCIA)
+    walk_to(b, (info['x'], info['y']), B_SPOT)
     b.recv_until(of(0x12, a.cid, at=5), what='B sees A')
-    check(True, 'B sees A on join')
+    check(True, 'B sees A')
     p = a.recv_until(of(0x12, b.cid, at=5), what='A sees B')
     check(p[9] == 32, 'A sees B as a dark knight (class byte 32)')
 
     print('framing: two packets in one write, then one split in halves')
-    a.send_raw(a.build(walk(128, 188, [3, 3, 3], 3)) + a.build(walk(131, 188, [5], 5)))
+    x, y = A_SPOT
+    a.send_raw(a.build(walk(x, y, [3, 3, 3], 3)) + a.build(walk(x + 3, y, [5], 5)))
     p = b.recv_until(of(0x10, a.cid), what='first move')
-    check((p[5], p[6], p[7]) == (131, 188, 3 << 4), 'B sees A walk to 131,188 facing 3')
+    check((p[5], p[6], p[7]) == (x + 3, y, 3 << 4), 'B sees A walk to {},{} facing 3'.format(x + 3, y))
     p = b.recv_until(of(0x10, a.cid), what='second move')
-    check((p[5], p[6]) == (131, 189), 'B sees A walk to 131,189')
-    half = a.build(walk(131, 189, [7], 7))
+    check((p[5], p[6]) == (x + 3, y + 1), 'B sees A walk to {},{}'.format(x + 3, y + 1))
+    half = a.build(walk(x + 3, y + 1, [7], 7))
     a.send_raw(half[:3])
     time.sleep(0.2)
     a.send_raw(half[3:])
     p = b.recv_until(of(0x10, a.cid), what='split move')
-    check((p[5], p[6]) == (130, 189), 'split packet reassembled')
+    x, y = x + 2, y + 1
+    check((p[5], p[6]) == (x, y), 'split packet reassembled')
 
     print('walk out of view and back')
-    a.send(walk(130, 189, [1] * 15, 1))  # 15 steps north, 130,174
-    a.send(walk(130, 174, [1] * 15, 1))  # 130,159, 29 tiles from B
+    a.send(walk(x, y, [3] * 10, 3))  # 10 steps east, still in view
+    a.send(walk(x + 10, y, [3] * 10, 3))  # 20 east, 24 tiles from B, at least 17 from the spiders
     b.recv_until(of(0x14, a.cid, at=4), what='B clears A')
     check(True, 'B lost A from view')
     a.recv_until(of(0x14, b.cid, at=4), what='A clears B')
     a.recv_until(of(0x14, mob, at=4), what='A clears mob')
     check(True, 'A lost B and the monster from view')
-    a.send(walk(130, 159, [5] * 15, 5))  # back to 130,174
+    a.send(walk(x + 20, y, [7] * 10, 7))  # back to 10 east
     p = b.recv_until(of(0x12, a.cid, at=5), what='B meets A again')
-    check((p[7], p[8]) == (130, 174), 'B sees A again at 130,174')
+    check((p[7], p[8]) == (x + 10, y), 'B sees A again at {},{}'.format(x + 10, y))
     a.recv_until(of(0x12, b.cid, at=5), what='A meets B again')
     a.recv_until(of(0x13, mob, at=5), what='A meets mob again')
     check(True, 'A sees B and the monster again')
-    a.send(walk(130, 174, [5] * 14, 5))  # 130,188
-    b.recv_until(lambda p: of(0x10, a.cid)(p) and (p[5], p[6]) == (130, 188), what='walk back')
-    check(True, 'B sees A walk to 130,188')
+    a.send(walk(x + 10, y, [7] * 10, 7))
+    b.recv_until(lambda p: of(0x10, a.cid)(p) and (p[5], p[6]) == (x, y), what='walk back')
+    check(True, 'B sees A walk to {},{}'.format(x, y))
+    a_pos = (x, y)
 
     print('chat')
     b.send([0xC1, 0, 0x00, *name10('Bobby'), *b'hello there\0'])
@@ -367,10 +467,91 @@ def play():
     check(True, 'A got B cleared after disconnect')
 
     print('B logs in again, character is still there')
-    b2, _ = login_and_enter('bob', 'pw2', 'Bobby', create=False)
+    b2 = login_ok('bob', 'pw2')
     check(b2.cid != b.cid, 'new connection gets a new cid {}'.format(b2.cid))
+    check([text(e[1:11]) for e in char_list(b2)] == ['Bobby'], 'char list has Bobby')
+    info = enter(b2, 'Bobby')
+    check((info['x'], info['y'], info['exp']) == (*B_SPOT, 90), 'Bobby is where he left with the exp of his kill')
+    b2.recv_until(of(0x12, a.cid, at=5), what='B sees A after relog')
     a.recv_until(of(0x12, b2.cid, at=5), what='A sees B again')
-    check(True, 'A sees B back')
+    check(True, 'A and B see each other again')
+
+    print('A goes back to character select')
+    p = logout(a, 1)
+    check(p.encrypted and p[4] == 1, 'logout result type 1, encrypted: ' + p.hex(' '))
+    b2.recv_until(of(0x14, a.cid, at=4), what='B loses A')
+    check(True, 'B lost A from view')
+    check([text(e[1:11]) for e in char_list(a)] == ['Alice'], 'char list has Alice')
+
+    print('character rules')
+    for name, why in (('Al', 'too short'), ('ALICE', 'name taken, case insensitive'), ('bad name', 'a space'),
+                      ('xwebzenx', 'webzen hides it in the client')):
+        p = create(a, name, 0)
+        check(p[4] == 0, 'refused {!r}: {}'.format(name, why))
+    p = create(a, 'Elfie', 32)
+    check(p[4] == 1 and p[15] == 1, 'Elfie created in slot 1')
+    for slot in range(2, 5):
+        p = create(a, 'Extra{}'.format(slot), 48)
+        check(p[4] == 1 and p[15] == slot, 'created in slot {}'.format(slot))
+    p = create(a, 'Extra5', 16)
+    check(p[4] == 2, 'no sixth character: result 2')
+    check(len(char_list(a)) == 5, '5 characters')
+
+    print('elves start in Noria')
+    info = enter(a, 'Elfie')
+    check_new_character(info, 32, NORIA)
+    check(logout(a, 1)[4] == 1, 'back to character select')
+
+    print('delete checks the personal code')
+    check(delete(a, 'Elfie', 'wrong') == 2, 'wrong code: result 2')
+    check(delete(a, 'Bobby', PERSONAL_CODE) == 0, 'another account\'s character: result 0')
+    for name in ('Elfie', 'Extra2', 'Extra3', 'Extra4'):
+        check(delete(a, name, PERSONAL_CODE) == 1, 'deleted ' + name)
+    check([text(e[1:11]) for e in char_list(a)] == ['Alice'], 'only Alice is left')
+
+    print('A enters again, where she logged out')
+    info = enter(a, 'Alice')
+    check((info['x'], info['y'], info['exp']) == (*a_pos, 90), 'Alice at {},{} with 90 exp'.format(*a_pos))
+    b2.recv_until(of(0x12, a.cid, at=5), what='B sees A back')
+    a.send(walk(*a_pos, [3, 3], 3))
+    a_pos = (a_pos[0] + 2, a_pos[1])
+    b2.recv_until(lambda p: of(0x10, a.cid)(p) and (p[5], p[6]) == a_pos, what='A walks')
+    time.sleep(2.5)
+    with sqlite3.connect(db_path) as db:
+        row = db.execute('SELECT x, y FROM characters WHERE name = ?', ('Alice',)).fetchone()
+    check(row == a_pos, 'autosave wrote the position {},{}'.format(*row))
+    a.send(walk(*a_pos, [3], 3))
+    a_pos = (a_pos[0] + 1, a_pos[1])
+    b2.recv_until(lambda p: of(0x10, a.cid)(p) and (p[5], p[6]) == a_pos, what='A walks')
+
+    print('restart the game server')
+    servers['bin/gs.py'].stop()
+    check(servers['bin/gs.py'].proc.returncode == 0, 'game server shut down cleanly')
+    a.s.close()
+    b2.s.close()
+    with sqlite3.connect(db_path) as db:
+        row = db.execute('SELECT x, y FROM characters WHERE name = ?', ('Alice',)).fetchone()
+        check(row == a_pos, 'shutdown saved Alice at {},{}'.format(*row))
+        password_hash = db.execute('SELECT password_hash FROM accounts WHERE name = ?', ('alice',)).fetchone()[0]
+        check(password_hash.startswith('scrypt$') and 'pw1' not in password_hash, 'password stored hashed')
+        db.execute('UPDATE characters SET zen = 31337 WHERE name = ?', ('Alice',))
+    servers['bin/gs.py'].start()
+
+    a = login_ok('alice', 'pw1')
+    e = char_list(a)
+    check(len(e) == 1 and text(e[0][1:11]) == 'Alice', 'Alice is in the char list after the restart')
+    info = enter(a, 'Alice')
+    check((info['x'], info['y'], info['map'], info['exp']) == (*a_pos, 0, 90),
+          'Alice is back at {},{} with 90 exp'.format(*a_pos))
+    check((info['money'], info['pk'], info['ctl']) == (31337, 3, 0), 'money 31337 at 36, pk level 3 at 40, ctl at 41')
+    bad, res = login('alice', 'nope')
+    check(res == 0, 'bad password still rejected')
+    bad.s.close()
+    b3 = login_ok('bob', 'pw2')
+    info = enter(b3, 'Bobby')
+    check((info['x'], info['y'], info['exp']) == (*B_SPOT, 90), 'Bobby too')
+    a.recv_until(of(0x12, b3.cid, at=5), what='A sees B after the restart')
+    check(True, 'A sees B after the restart')
 
 
 def port_open(port):
@@ -381,44 +562,58 @@ def port_open(port):
         return False
 
 
+class Server:
+    """A server script run with the test config, its log kept across restarts."""
+
+    def __init__(self, script, port, config):
+        self.script = script
+        self.port = port
+        self.config = config
+        self.log = tempfile.NamedTemporaryFile('w+', prefix=Path(script).stem + '-', suffix='.log', delete=False)
+        self.proc = None
+
+    def start(self):
+        self.proc = subprocess.Popen([sys.executable, '-u', self.script], cwd=ROOT, stdout=self.log,
+                                     stderr=subprocess.STDOUT, env={**os.environ, 'MU_CONFIG': self.config})
+        deadline = time.time() + 10
+        while not port_open(self.port):
+            if time.time() > deadline or self.proc.poll() is not None:
+                raise AssertionError(self.script + ' did not start')
+            time.sleep(0.1)
+
+    def stop(self):
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            self.proc.wait(5)
+
+
 def main():
     if port_open(CS_PORT) or port_open(GS_PORT):
         print('ports {} / {} are in use, stop the running servers first'.format(CS_PORT, GS_PORT))
         return 2
 
-    logs = {}
-    servers = []
-    config = tempfile.NamedTemporaryFile('w', prefix='mu-test-', suffix='.ini')
-    config.write(CONFIG)
-    config.flush()
+    tmp = tempfile.TemporaryDirectory(prefix='mu-test-')
+    db_path = os.path.join(tmp.name, 'mu.db')
+    config = os.path.join(tmp.name, 'config.ini')
+    Path(config).write_text(CONFIG.format(db_path))
+    servers = {script: Server(script, port, config) for script, port in (('bin/cs.py', CS_PORT), ('bin/gs.py', GS_PORT))}
     try:
-        for script in ('bin/cs.py', 'bin/gs.py'):
-            log = tempfile.NamedTemporaryFile('w+', prefix=Path(script).stem + '-', suffix='.log', delete=False)
-            logs[script] = log
-            servers.append(subprocess.Popen([sys.executable, '-u', script], cwd=ROOT, stdout=log,
-                                            stderr=subprocess.STDOUT, env={**os.environ, 'MU_CONFIG': config.name}))
-
-        deadline = time.time() + 10
-        while not (port_open(CS_PORT) and port_open(GS_PORT)):
-            if time.time() > deadline or any(s.poll() is not None for s in servers):
-                raise AssertionError('servers did not start')
-            time.sleep(0.1)
-
-        play()
+        for s in servers.values():
+            s.start()
+        play(servers, db_path)
         print('ALL OK')
         return 0
     except (AssertionError, EOFError, OSError) as e:
         print('FAILED:', e)
-        for script, log in logs.items():
-            log.flush()
-            print('--- {} ({})'.format(script, log.name))
-            print(''.join(Path(log.name).read_text(errors='replace').splitlines(True)[-30:]))
+        for s in servers.values():
+            s.log.flush()
+            print('--- {} ({})'.format(s.script, s.log.name))
+            print(''.join(Path(s.log.name).read_text(errors='replace').splitlines(True)[-30:]))
         return 1
     finally:
-        for s in servers:
-            s.terminate()
-            s.wait(5)
-        config.close()
+        for s in servers.values():
+            s.stop()
+        tmp.cleanup()
 
 
 if __name__ == '__main__':

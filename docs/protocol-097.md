@@ -62,7 +62,7 @@ a serial counter and the rest is SimpleModulus encrypted (code).
 handlers. On a C1 or a serial mismatch they drop the packet and the client sends `C1 F1 03 00` (code):
 
 `16` exp, `19` skill animation, `1C` teleport, `1E` area skill animation, `24` item move result, `29`,
-`30` npc talk, `F1 02` logout result, `F3 03` character info, `F3 10` inventory.
+`30` npc talk, `F1 02` logout result (types 1 and 2), `F3 03` character info, `F3 10` inventory.
 
 **Login fields** (account, password) are additionally xored with `FC CF AB` (repeating) before the chain
 (code, traffic).
@@ -84,10 +84,10 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 |---|---|---|
 | `C1 F1 00` join result | `[4]` 1 = ok, `[5..6]` player cid BE, `[7..11]` version, must equal the exe's decoded version (`09704`), otherwise "version not matched" | code `0x4122b0` |
 | `C1 F1 01` login result | `[4]` result: 1 ok; 0, 2..6, 8..0x0D, 0x11, 0xC0..0xC2 and 0xD0..0xD2 each show their own message, anything else a generic error. Usual meanings: 0 wrong password, 3 in use, 4 server full, 5 banned, 6 new version | code (dispatcher) |
-| `C3 F1 02` logout result | must be encrypted, `[4]` type | code `0x4129f0` (index) |
+| `C3 F1 02` logout result | `[4]` type. 0: the client destroys its window (exits), the encryption isn't checked. 1: must be encrypted, back to character select, the client resets its game state and sends `F3 00` itself. 2: must be encrypted, the client closes the connection and goes back to the server list (scene 2). Other values: ignored | code `0x4129f0` |
 | `C1 F3 00` character list | `[4]` count, then 26 bytes per character: `[+0]` slot, `[+1..10]` name, `[+11]` 0, `[+12..13]` level, `[+14]` ctl code (`& 0x10` marks the char), `[+15]` class, `[+16..25]` equipment | code `0x4124b0` |
-| `C1 F3 01` character created | `[4]` result: 1 ok, 0 and 2 show different errors. `[5..14]` name, `[15]` slot. Class and look come from the create screen, nothing after `[15]` is read | code `0x412600` |
-| `C1 F3 02` character deleted | `[4]` 1 = ok, anything else is shown as an error code | code (dispatcher) |
+| `C1 F3 01` character created | `[4]` result: 1 ok, 0 opens dialog `0x36`, 2 dialog `0x37` (texts not looked up, mup uses the usual meanings: 0 bad or taken name, 2 no free slot). `[5..14]` name, `[15]` slot: index into the 5 character slots (`0x364` bytes each at `DAT_07a5f9b8`). Class and look come from the create screen, nothing after `[15]` is read | code `0x412600` |
+| `C1 F3 02` character deleted | `[4]` 1 opens dialog `0x39` (deleted), anything else dialog `0x3a` showing the value as an error code. mup: 0 no such character of the account, 2 wrong personal code | code (dispatcher) |
 | `C3 F3 03` character info | **42 bytes**, must be encrypted: `[4]` x `[5]` y `[6]` map `[7]` direction, `[8..11]` exp, `[12..15]` next exp, then 2 bytes each: `[16]` level up points `[18]` str `[20]` agi `[22]` vit `[24]` ene `[26]` life `[28]` max life `[30]` mana `[32]` max mana, `[34..35]` unused, `[36..39]` money, `[40]` pk level, `[41]` ctl code | code `0x413380` |
 | `C1 F3 05` level up | `[4]` level `[6]` level up points `[8]` max life `[10]` max mana, 2 bytes each | code `0x41b6d0` (asm) |
 | `C4 F3 10` inventory | must be encrypted | code `0x414310` (index) |
@@ -116,9 +116,12 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C1 F1 03` client report | `[3]` 3, `[4]` reason: 0 = a must-be-encrypted packet arrived unencrypted. When a C3/C4 packet fails to decrypt the client sends reason 6 instead, itself encrypted (C3) with a random byte appended | code (handlers, dispatcher) |
 | `C1 F3 00` character list request | no fields | traffic |
 | `C1 F3 01` create character | `[4..13]` name, `[14]` class: **class number << 2** (0 dw, 16 dk, 32 elf, 48 mg), everything the server sends uses class number << 3 | traffic |
-| `C1 F3 02` delete character | `[4..13]` name, `[14..23]` personal code | code `0x4c3f40` (index) |
+| `C3 F1 02` logout request | 5 bytes, sent encrypted: `[4]` type as in the result: 0 close the game, 1 character select, 2 server select. Preceded by `F3 30` (types 0 and 1 before, type 2 right after). The sender isn't in the sender index, a byte scan for `F1` head stores doesn't find it either | traffic (`1791402942.log`, `1791403016.log`) |
+| `C1 F3 30` key settings | 18 bytes, sent on every logout: `[4..13]` 10 bytes (skill hotkeys, all 0 when none set), `[14..17]` `09 00 04 08` seen. Layout not reviewed, presumably what the server sends back with `F3 30` on join | traffic |
+| `C3 31` | no fields, sent right after `F3 00` when going back to character select. Usual meaning: close the NPC / shop window | traffic |
+| `C1 F3 02` delete character | `[4..13]` name of the selected character, `[14..23]` the personal code as typed in the dialog (10 byte buffer, zero padded) | code `0x4c3f40` |
 | `C1 F3 03` enter game | `[4..13]` name | traffic |
-| `C1 F3 06` add level up point | `[4]` stat | index `0x49c950` |
+| `C1 F3 06` add level up point | 5 bytes, `[4]` stat (`03` seen) | index `0x49c950`, traffic |
 | `C3 0E 00` ping | 12 bytes: `[4..7]` tick count, `[8..9]` attack speed, `[10..11]` magic speed | code `0x40e2a0`, traffic |
 | `C1 10` walk | `[3]` x `[4]` y (start of the walk), `[5]` direction << 4 \| step count, `[6..]` step directions, one per nibble, high nibble first. Sent with 0 steps to only turn | traffic |
 | `C1 15` attack | `[3..4]` target cid, `[5]` attack animation (0x64 seen), `[6]` direction | traffic, code `0x4650a0` |

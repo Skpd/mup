@@ -6,9 +6,10 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 ## Layout
 
 - `bin/cs.py` connect server (port 44405), `bin/gs.py` game server (55901). Run from the repo root, the crypto
-  keys in `data/` and `config.ini` are opened with relative paths.
+  keys in `data/`, `config.ini` and the database are opened with relative paths. `bin/account.py`: accounts
+  (create, password, personal code, ban).
 - `config.ini` (or the file in `MU_CONFIG`), read by `mup/config.py`: ports, advertised GS host, exp / drop rates,
-  log level, packet logging.
+  database file and autosave, account auto creation, log level, packet logging.
 - `mup/packet/`: `base.py` has `Base(bytearray)` (type, size, head, sub) and the declarative `Packet`: `code`, `size`,
   `fields` as `(offset, name, type[, default])`, `entry` for lists. Field types carry the byte order (`u16` LE,
   `u16be`, `cid` BE). `Packet(name=value)` builds, `Packet(data)` parses into attributes; list packets have an
@@ -16,8 +17,9 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   in `server.py` (`S...` names).
 - `mup/server/`: `protocol.py` (framing, crypto, dispatch to handlers), `game.py` (`GameServer`: connections by cid,
   distance based visibility, monster respawn), `connect.py`, `combat.py`, `handler/*` (one per packet, registered
-  in `bin/gs.py` / `bin/cs.py`).
-- `mup/model/` dataclasses, `mup/mapper/memory.py` in-memory storage (the Mongo mappers next to it are old and unused).
+  in `bin/gs.py` / `bin/cs.py`), `character.py` (creation rules, start positions).
+- `mup/model/` dataclasses. `mup/repository/`: SQLite storage (`database.py` schema migrations, account and
+  character repositories). Characters in game live in memory and are saved by `GameServer.save`.
 - `mup/common/crypt.py`: C3/C4 SimpleModulus, C1/C2 xor chain (`extract` / `pack`), login field xor.
 - `docs/protocol-097.md`: the protocol as the client implements it. `docs/roadmap.md`: milestones.
 - `tools/`: protocol extraction from the client with Ghidra. `tests/client.py`: scripted client test.
@@ -71,5 +73,5 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   modules rather than in handlers.
 - Packet fields are copied from the doc table with their offsets; a layout mistake (overlap, past the size) fails
   at import. Logging: `logging.getLogger(__name__)`, no `print`.
-- Storage is in memory until roadmap M1 (SQLite).
+- Schema changes: append a migration to `MIGRATIONS` in `mup/repository/database.py`, never edit a shipped one.
 - Commit only when asked.

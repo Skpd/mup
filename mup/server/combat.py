@@ -24,9 +24,9 @@ def hit_monster(proto, monster: Monster, dmg, flags=0):
     if p.exp >= p.next_exp:
         p.level += 1
         p.exp = 0
-        p.max_life += 10
-        p.max_mana += 15
-        proto.write(SLevelUp(level=p.level, points=5, max_life=p.max_life, max_mana=p.max_mana))
+        p.free_points += p.class_info.level_points
+        proto.write(SLevelUp(level=p.level, points=p.free_points, max_life=p.max_life, max_mana=p.max_mana))
+        proto.server.save(proto)
 
     for c in nearby:
         if c != proto:

@@ -4,13 +4,25 @@ from itertools import count
 from random import randint, choice
 from mup.common.interval import Interval
 from mup.config import Config
-from mup.mapper.memory import MemoryAccountMapper, MemoryPlayerMapper
 from mup.model.monster import Monster
 from mup.model.player import Player
 from mup.packet.server import SServerJoin, SMeetMonster, SClear
+from mup.repository import database
+from mup.repository.account import AccountRepository
+from mup.repository.character import CharacterRepository
 from mup.server.base import ServerBase
 
 logger = logging.getLogger(__name__)
+
+# placeholders until the monster spawns of roadmap M2: weak monsters just outside each Lorencia town exit, the client
+# doesn't allow attacks in the safe zone. Monster type, x and y range of an open area (Terrain1.att)
+LORENCIA_EXITS = [
+    (2, range(130, 139), range(82, 87)),  # north, budge dragons
+    (3, range(177, 186), range(124, 129)),  # east, spiders
+    (3, range(129, 139), range(173, 178)),  # south, spiders
+    (2, range(87, 94), range(124, 132)),  # west, budge dragons
+]
+MONSTERS_PER_EXIT = 3
 
 
 class GameServer(ServerBase):
@@ -24,20 +36,26 @@ class GameServer(ServerBase):
         self.config = config
         self.cids = count(self.first_player_cid)
 
-        # todo persistent storage, mongo mappers are in mup.mapper.account / mup.mapper.player
-        self.player_mapper = MemoryPlayerMapper()
-        self.account_mapper = MemoryAccountMapper()
+        self.db = database.connect(config.db_path)
+        self.accounts = AccountRepository(self.db)
+        self.characters = CharacterRepository(self.db)
 
-        mob = Monster(0x0f, 6)
-        mob.x = 127
-        mob.y = 189
-        mob.spawn_area = (range(124, 132), range(186, 194))
-        mob.dead = False
-        self.connections[mob.cid] = mob
+        cids = count(1)
+        for type_id, xs, ys in LORENCIA_EXITS:
+            for _ in range(MONSTERS_PER_EXIT):
+                mob = Monster(next(cids), type_id)
+                mob.spawn_area = (xs, ys)
+                mob.x = choice(xs)
+                mob.y = choice(ys)
+                mob.dead = False
+                self.connections[mob.cid] = mob
 
         # respawn init
         self.monster_spawner = Interval(self.monster_spawn, 1)
         self.monster_spawner.start()
+
+        self.autosave = Interval(self.save_all, config.autosave_interval)
+        self.autosave.start()
         return
 
         # spawn
@@ -117,14 +135,41 @@ class GameServer(ServerBase):
 
     def disconnect(self, c):
         self.connections.pop(c.cid, None)
+        if c.player is not None:
+            self.leave_world(c)
 
+    def leave_world(self, c):
+        """Saves the character of connection c and takes it out of the game, the account stays logged in."""
         p = c.player
-        if p is None:
-            return
-
-        self.player_mapper.store(p)
+        self.save(c)
+        c.player = None
+        c.playing = False
         for other in self.get_players_within(p.map_id, p.x, p.y):
             other.write(SClear.of([c.cid]))
+
+    def account_online(self, account_id):
+        return any(getattr(c, 'acc', None) is not None and c.acc.id == account_id for c in self.connections.values())
+
+    def save(self, c):
+        """Writes the character of connection c. A failed write is logged, the game goes on."""
+        try:
+            self.characters.save(c.player)
+        except Exception:
+            logger.exception('Failed to save %s', c.player.name)
+
+    def save_all(self):
+        players = [c for c in self.connections.values() if getattr(c, 'player', None) is not None]
+        for c in players:
+            self.save(c)
+        if players:
+            logger.info('Saved %s characters', len(players))
+
+    def shutdown(self):
+        """Saves the characters in game and closes the database."""
+        self.monster_spawner.stop()
+        self.autosave.stop()
+        self.save_all()
+        self.db.close()
 
     def add_connection(self, c):
         c.cid = next(self.cids)

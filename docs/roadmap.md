@@ -9,7 +9,7 @@ Packet codes are hex, details in `docs/protocol-097.md`. Where a code's meaning 
 | milestone | status |
 |---|---|
 | M0 protocol fixes, housekeeping | done |
-| M1 persistence, character select flow | todo |
+| M1 persistence, character select flow | done |
 | M2 world: maps, gates, monsters | todo |
 | M3 items | todo |
 | M4 combat and progression | todo |
@@ -66,6 +66,28 @@ Done when: test checks money / pk level in character info and a damage above 255
 
 Done when: create a character, go back to character select, restart the server, log in, the character is there
 with its position and exp.
+
+Done:
+- `mup/repository/`: `database.py` (connect, schema as numbered migrations in `PRAGMA user_version`, WAL),
+  `account.py`, `character.py`. All tables of the starting point exist; items, warehouses and guilds are empty
+  until M3 / M5 / M7. Names are unique case insensitive.
+- Accounts: scrypt password hash, `active` is the ban flag, `personal_code` column added (not in the starting
+  point): auto created accounts get `personal_code` from the config. `bin/account.py` creates accounts, sets
+  passwords and personal codes, bans.
+- Characters: names of 3..10 letters / digits without `webzen` (the client hides those players), only first
+  classes, 5 slots. Base stats from `DefaultClassInfo.txt` (`CLASS_INFO`), max life / mana are derived from it
+  (`Player.max_life`), level up adds the class's points (MG 7). Start at a random spot of the gate area: the
+  areas contain walls and a fountain, M2 has to pick a walkable tile.
+- Saved on logout, disconnect, level up, every `autosave_interval` seconds and on SIGINT / SIGTERM. A second login
+  of an account in game is refused with `F1 01` result 3.
+- Logout `F1 02`: result handler read in the code, the request confirmed in traffic.
+- Real client: created characters of three classes, character select, server select, exit, delete with a wrong
+  and the right personal code, killed the exit monsters up to level 3, restarted the server twice: position,
+  level, exp and level up points survived each restart.
+- Found on the way: the client sends its key settings (`F3 30`) on every logout, mup doesn't store them yet.
+- Placeholder monsters until M2: 3 budge dragons or spiders just outside each of the 4 Lorencia town exits
+  (`LORENCIA_EXITS` in `game.py`), the client doesn't allow attacks in the safe zone. The test walks A and B to the
+  east exit.
 
 ## M2 world: maps, gates, monsters
 

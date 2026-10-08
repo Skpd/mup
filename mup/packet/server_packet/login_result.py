@@ -11,6 +11,7 @@ class LoginResult(Packet):
 
     BAD_PASSWORD = 0x00
     SUCCESS = 0x01
+    NO_ACCOUNT = 0x02
     IN_USE = 0x03
     SERVER_IS_FULL = 0x04
     ACCOUNT_BANNED = 0x05

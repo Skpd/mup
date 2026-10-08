@@ -8,3 +8,8 @@ class CharDeleted(Packet):
     fields = (
         (4, 'result', u8),
     )
+
+    OK = 1
+    # any other value is shown as an error code
+    NOT_FOUND = 0
+    WRONG_CODE = 2

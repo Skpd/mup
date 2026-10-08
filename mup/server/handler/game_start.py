@@ -8,12 +8,15 @@ logger = logging.getLogger(__name__)
 
 
 def game_start_handler(msg: CJoinGame, proto: BaseProtocol):
+    if proto.acc is None or proto.playing:
+        return
+
     try:
-        player = proto.server.player_mapper.load(msg.name)
+        player = proto.server.characters.load(msg.name)
     except NotFoundError:
         player = None
 
-    if player is None or proto.acc is None or player.account.id != proto.acc.id:
+    if player is None or player.account_id != proto.acc.id:
         logger.warning('%s is not a character of this account', msg.name)
         return
 

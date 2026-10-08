@@ -1,45 +1,34 @@
 import logging
-from mup.error import NotFoundError
-from mup.model.player import Player, CharacterClass, DEFAULT_SKILLS
 from mup.packet.client_packet.char_create import CharCreate
 from mup.packet.server import SCharCreated
+from mup.server.character import MAX_CHARACTERS, valid_name, creatable_class, new_character
 from mup.server.protocol import BaseProtocol
 
 logger = logging.getLogger(__name__)
 
-MAX_CHARACTERS = 5
-
 
 def create_character_handler(msg: CharCreate, proto: BaseProtocol):
-    if proto.acc is None:
+    if proto.acc is None or proto.playing:
         return
 
-    players = proto.server.player_mapper
-    taken = {p.index for p in players.get_by_account(proto.acc)}
+    characters = proto.server.characters
+    taken = {p.index for p in characters.by_account(proto.acc.id)}
     free = [i for i in range(MAX_CHARACTERS) if i not in taken]
+    class_type = creatable_class(msg.class_type)
 
-    try:
-        class_type = CharacterClass(msg.class_type)
-        players.load(msg.name)
-        name_taken = True
-    except ValueError:
-        class_type = None
-        name_taken = False
-    except NotFoundError:
-        name_taken = False
+    if not valid_name(msg.name) or characters.exists(msg.name):
+        result = SCharCreated.BAD_NAME
+    elif not free or class_type is None:
+        result = SCharCreated.NO_SLOT
+    else:
+        result = SCharCreated.OK
 
-    if not msg.name or class_type is None or name_taken or not free:
-        logger.info('%s can\'t create %s, class %s', proto.acc.name, msg.name, msg.class_type)
-        proto.write(SCharCreated(result=0))
+    if result != SCharCreated.OK:
+        logger.info('%s can\'t create %s, class %s: result %s', proto.acc.name, msg.name, msg.class_type, result)
+        proto.write(SCharCreated(result=result))
         return
 
-    p = Player(
-        name=msg.name,
-        index=free[0],
-        class_type=class_type,
-        skills=list(DEFAULT_SKILLS.get(class_type, [])),
-        account=proto.acc,
-    )
-    players.store(p)
-    logger.info('%s created %s, class %s', proto.acc.name, p.name, class_type.name)
-    proto.write(SCharCreated(result=1, name=p.name, slot=p.index))
+    p = new_character(proto.acc.id, free[0], msg.name, class_type)
+    characters.create(p)
+    logger.info('%s created %s, class %s in slot %s', proto.acc.name, p.name, class_type.name, p.index)
+    proto.write(SCharCreated(result=result, name=p.name, slot=p.index))

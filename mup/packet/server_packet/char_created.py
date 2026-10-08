@@ -10,3 +10,8 @@ class CharCreated(Packet):
         (5, 'name', str10, ''),
         (15, 'slot', u8, 0),
     )
+
+    OK = 1
+    # usual meanings, the client opens dialog 0x36 for 0 and 0x37 for 2, their texts aren't looked up
+    BAD_NAME = 0
+    NO_SLOT = 2
