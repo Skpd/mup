@@ -11,7 +11,7 @@ from mup.packet.client_packet.client_close import ClientClose as ClientClose097
 from mup.packet.client_packet.logout import Logout as Logout097
 from mup.packet.client_packet.rotate import Rotate as Rotate097
 from mup.packet.client_packet.move import Move as Move097
-from mup.packet.client_packet.chat import Chat as Chat097
+from mup.packet.client_packet.chat import Chat as Chat097, Whisper as Whisper097
 from mup.packet.client_packet.attack import Attack as Attack097
 from mup.packet.client_packet.magic_attack import MagicAttack as MagicAttack097
 from mup.packet.client_packet.magic_aoe import MagicAOE as MagicAOE097
@@ -26,6 +26,11 @@ from mup.packet.client_packet.npc import (Talk as Talk097, CloseWindow as CloseW
                                           Sell as Sell097, Repair as Repair097, WarehouseMoney as WarehouseMoney097,
                                           WarehouseClose as WarehouseClose097, Mix as Mix097,
                                           ChaosClose as ChaosClose097)
+from mup.packet.client_packet.party import (PartyRequest as PartyRequest097, PartyAnswer as PartyAnswer097,
+                                            PartyLeave as PartyLeave097)
+from mup.packet.client_packet.trade import (TradeRequest as TradeRequest097, TradeAnswer as TradeAnswer097,
+                                            TradeZen as TradeZen097, TradeOk as TradeOk097,
+                                            TradeCancel as TradeCancel097)
 
 CLoginRequest = LoginRequest097
 CServerList = ServerList097
@@ -40,6 +45,7 @@ CLogout = Logout097
 CRotate = Rotate097
 CMove = Move097
 CChat = Chat097
+CWhisper = Whisper097
 CAttack = Attack097
 CMagicAttack = MagicAttack097
 CMagicAOE = MagicAOE097
@@ -61,6 +67,14 @@ CWarehouseMoney = WarehouseMoney097
 CWarehouseClose = WarehouseClose097
 CMix = Mix097
 CChaosClose = ChaosClose097
+CPartyRequest = PartyRequest097
+CPartyAnswer = PartyAnswer097
+CPartyLeave = PartyLeave097
+CTradeRequest = TradeRequest097
+CTradeAnswer = TradeAnswer097
+CTradeZen = TradeZen097
+CTradeOk = TradeOk097
+CTradeCancel = TradeCancel097
 
 # head, sub (None for packets without one) -> packet class
 head_code_map = {(p.code[1], p.code[2] if len(p.code) > 2 else None): p for p in (
@@ -70,6 +84,8 @@ head_code_map = {(p.code[1], p.code[2] if len(p.code) > 2 else None): p for p in
     CCharList, CCharCreate, CCharDelete, CJoinGame,
     CPickUp, CDropItem, CMoveItem, CUseItem,
     CTalk, CCloseWindow, CBuy, CSell, CRepair, CWarehouseMoney, CWarehouseClose, CMix, CChaosClose,
+    CWhisper, CPartyRequest, CPartyAnswer, CPartyLeave,
+    CTradeRequest, CTradeAnswer, CTradeZen, CTradeOk, CTradeCancel,
 )}
 
 

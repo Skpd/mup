@@ -60,6 +60,7 @@ to this exe.
 | items | see [Items](#items): type from item bytes `0x459b80`, item from bytes `0x45a270`, place in a window `0x48d940`, remove `0x48e0d0`, put the held item back `0x48e650`, free space check `0x493880`. Held item `0x7d92a60` (`0x44` bytes), its source slot `0x7da71e0`, move pending `0x7dab7ad`. Equipment window `0x48eec0`, inventory window clicks and right click use `0x4916f0` |
 | NPC windows | see [NPC windows](#npc-windows): inventory open `0x7dab76f`, shop `0x7dab770` (kept encoded like the hero), warehouse `0x7dab771`, chaos machine `0x7dab772`, trade `0x7dab773`, Devil Square `0x7dab774`, server division `0x7dab77c`; all closed by `0x48cd10`. Shop / warehouse grid `0x7da71f8` (120 items of `0x44`), chaos box `0x7daaea0` (32). Window clicks: shop `0x4a19f0`, warehouse `0x4a0e40` (zen dialog `0x4c4300`), chaos machine `0x49f070` (drawn by `0x4a7760`), inventory buttons `0x49ce00`, held item dropped on a window `0x497760` / `0x493dc0`, dialogs pending `0x7dab788` (1 sell, 2 mix, 3 trade, 4 vault lock) |
 | prices | item value `0x45ad50`, repair cost `0x486910`, full durability `0x486fd0`, repair all cost `0x486aa0` (into `0x7dab750`), see [Prices](#prices) |
+| chat | input and the `00` / `02` senders `0x409e80`, chat commands (`/trade`, `/party`, `/guild`) `0x46a340`, whisper level check `0x45e1a0`, chat log `0x45e860(name, text, type)`, bubble `0x45fad0`. Dialogs (party and trade questions, zen) `0x4c4300`, dialog shown `0x82a86bc` (116 trade zen, 120 party question, 121 trade question). See [Chat](#chat), [Party](#party), [Trade](#trade) |
 
 ## Transport
 
@@ -115,8 +116,26 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C1 F3 11` skill list | `[4]` count (max 20), then 3 bytes each: `[+0]` slot, `[+1]` skill number, `[+2]` unused. `[4]` = `0xFE`: set one skill, `[5]` slot `[6]` number. `[4]` = `0xFF`: remove skill at slot `[5]` | code `0x414010` |
 | `C1 F3 14` item changed | `[4]` inventory slot, `[5..8]` the item placed there (`0x48d940`, below 12 equipment), the held item is gone, a sound. The answer to a jewel | code (dispatcher `0x42190a`, asm) |
 | `C1 F3 30` key settings | 18 bytes: `[4..13]` the skill number on hotkey 0..9, `FF` none: the client looks the number up in its skill list (character `+0x63`) and puts that list index on the hotkey. `[14..17]` other settings, read, not reviewed. Same layout as the client's `F3 30` | code `0x41ff50` |
-| `C1 00` chat | `[3..12]` name, `[13..72]` message. Message prefix `~` party, `@` guild, `#` shout, anything else normal chat | code `0x414960` |
+| `C1 00` chat | `[3..12]` name, `[13..72]` message (60 bytes copied). By the first byte of the message: `~` party and `@` guild go to the chat log only (in their colours, without the prefix), `#` only a bubble over the speaker, anything else a bubble and the log. See [Chat](#chat) | code `0x414960` |
+| `C1 01` object message | `[3..4]` cid, `[5..]` message, shown under the object's name (`0x45f640`, not reviewed). Not used by mup | code (dispatcher) |
+| `C1 02` whisper | `[3..12]` sender, `[13..72]` message (60 bytes copied). Dropped while the player turned whispers off (`/whisper off`, client only). The sender joins the 10 names a hero below level 6 may whisper to (`0x45e470`) | code (dispatcher `0x421b1f`) |
+| `C1 03` check | `[4..5]` a key, the client answers with `03` and 4 bytes from `0x408f70`. Not reviewed, not used by mup | code (dispatcher) |
+| `C1 0B` event state | the packet goes into a list of 10, `[4]` 1 sets a flag from `[3]`, then `0x4b3370`. Not reviewed | code (dispatcher) |
+| `C1 0C` whisper failed | `[3]` 0: "No users" (Text 482) under the name last whispered to, other values nothing | code (dispatcher) |
 | `C1 0D` notice | `[3]` type, `[4..]` text | code `0x414d10` (reads only) |
+| `C3 36` trade request | must be encrypted. `[3..12]` the name of who asks: the trade question (dialog 121), the held item is put back | code (dispatcher `0x42233c`) |
+| `C1 37` trade answer | 20 bytes. `[3]` 0: "Your trade has been canceled." (Text 492), 2: "You cannot trade right now." (493). 1: the trade window opens beside the inventory (other windows closed), oks and zens cleared: `[4..13]` the partner's name, `[14..15]` its level (shown as "About" 10, 50, 100 or 200), `[16..19]` its guild number (the guild mark shown) | code `0x41d1b0` |
+| `C1 38` partner's item gone | `[3]` slot of the partner's 8 x 4 grid, a sound | code (dispatcher) |
+| `C1 39` partner's item | `[3]` slot, `[4..7]` item, placed in the partner's grid (`0x48d940`), a sound | code (dispatcher) |
+| `C1 3A` own trade zen | `[3]` 0: the own zen in the trade is 0, otherwise the amount of the client's last `3A` request. The money isn't in it (`22 FE`) | code (dispatcher) |
+| `C1 3B` partner's zen | `[4..7]` the zen the partner puts in | code (dispatcher) |
+| `C1 3C` ok | `[3]` 0 the partner's ok off, 1 on, 2 the own ok off. A sound | code (dispatcher) |
+| `C1 3D` trade end | `[3]` 0: "Your trade has been canceled." (494), the partner's grid emptied, 2: "... because your inventory is full." (495), 3: "Trade request is canceled" (496), closes the question. Then for any value the inventory and the NPC and trade windows close (`0x48cd10`, which also empties both trade grids without putting the own items back) and the held item is dropped. Kept while a `24` is pending, handled after it | code `0x41d6f0` |
+| `C1 40` party request | `[3..4]` cid of who asks: the party question (dialog 120), the cid is sent back in the answer | code (dispatcher) |
+| `C1 41` party result | `[3]` 0: "Creating a party has failed." (497), 1: "Your request has been denied." (498), 2: "Party is full." (499), 3: "The user has left the game." (500), 4: "The user is already in another party." (501), 5: "The level gap ... less than 120" (535). Any value closes the question | code (dispatcher `0x422255`) |
+| `C1 42` party list | `[4]` count, then **24 bytes** each from `[5]`: `[+0..9]` name, `[+10]` index, `[+11]` map, `[+12]` x `[+13]` y, `[+16..19]` life, `[+20..23]` max life (4 bytes each). `[3]` isn't read. See [Party](#party) | code `0x41de50`, `0x4a44e0` |
+| `C1 43` party left | no fields: "You have just left the party." (502), the member count is 0 | code (dispatcher) |
+| `C1 44` party life | `[3]` count, then 1 byte each from `[4]`: member index << 4 \| life in tenths (0..10), for the bars over the members' heads | code (dispatcher), `0x47f970` |
 | `C1 0F` weather | `[3]` high nibble: 0 turns the effect off, 1 turns it on with intensity low nibble * 6, other values are ignored | code (dispatcher) |
 | `C1 10` walk | `[3..4]` cid, `[5]` x `[6]` y, `[7]` direction in the high nibble. Any object but the hero (players and monsters alike): x, y becomes its walk target and the client finds the path there from the tile it has the object on (`0x425720`), puts it on the target when there is none. The hero: x, y becomes its tile when it isn't walking. Dead objects (`17`) are ignored | code `0x414ea0` |
 | `C1 11` place | `[3..4]` cid, `[5]` x `[6]` y: puts the object on x, y without walking. mup sends it to the players who see a teleport | code `0x415250` |
@@ -193,7 +212,16 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C3 1C` move through a gate | 6 bytes: `[3]` gate number, `[4]` `[5]` 0. Sent while the hero stands in the area of an entrance gate (`Gate.bmd` kind 1) of its map and its level is at least the gate's (magic gladiators: two thirds of it, class number 3), else the client shows the level message. At most every 3 s and only one until a `1C` answer arrives. Gates 45..49, 55, 56 also need the hero not riding a Horn of Uniria / Dinorant (items `0x1A2` / `0x1A3`), 62..65 a check not reviewed | code `0x474030` |
 | `C3 1C` teleport | 6 bytes: `[3]` 0, `[4]` x `[5]` y, the target tile. Sent for the teleport skill (6) when the target tile's attribute is 0 (no safe zone, wall or anything), at most every 3 s and one until the `1C` answer, not riding (13/2 check, not reviewed). The answer is `1C` with `[3]` 0 | code `0x46f270` |
 | `C3 1D` area skill hits | `[3]` skill list index, `[4]` x `[5]` y, `[6]` serial, `[7]` count, then target cids BE. **Has a byte between y and count** that OpenMU's 0.75 layout doesn't. Sent by the skill effects as they land (`0x442ec0`, `0x447d60`, `0x448120`, `0x450190`), so one cast can send several: at most 5 targets, objects within a radius of the effect's point (80..300 world units, 0.8..3 tiles, per effect), monsters or the one player the skill aims at, not dead, not the hero. Nothing is sent when no object is in reach. x, y and serial come from the effect | code `0x442610` |
-| `C1 00` chat | name + message, not reviewed yet: send a chat line and check the log | - |
+| `C1 00` chat | `[3..12]` own name, `[13..]` the line typed, with its zero when shorter than 60 bytes, cut at 60 bytes. The client doesn't show its own line, the server sends it back | code `0x409e80` |
+| `C1 02` whisper | `[3..12]` the name in the whisper box, `[13..]` the message as in `00`. Sent from level 6, below only to the last 10 names that whispered (Text 479), never while the hero's name contains `webzen`. The client shows the line itself and keeps the name for `0C` | code `0x409e80`, `0x45e1a0` |
+| `C3 36` trade request | `[3..4]` target cid. `/trade` or `/exchange` (Text 258, 259) typed in chat, at the player under the cursor or the one next to the hero, from level 6 (Text 478). The target must be within 1 tile of the hero (both axes) | code `0x46a340` |
+| `C1 37` trade answer | `[3]` 1 yes, 0 no, from the trade question | code `0x4c4300` |
+| `C1 3A` trade zen | `[3]` 0, `[4..7]` the amount, from the trade window's zen dialog (dialog 116). The dialog checks it against the money + the zen already in the trade, clears the own ok first (`3C` 0) | code `0x4c4300` |
+| `C3 3C` trade ok | `[3]` 1 ok, 0 not. The window's ok button toggles it (only without a held item, 150 frames after an own change), taking an item out of the own grid or the zen dialog clear it. After a partner's change the button asks first ("Warning! The levels and options of some items have been changed.", Text 370..372) | code `0x4a1070`, `0x4916f0`, `0x497760` |
+| `C3 3D` trade cancel | no fields. The window's cancel button and closing the window (hotkeys) | code `0x4a1070`, `0x467a50`, `0x4779b0` |
+| `C3 40` party request | `[3..4]` target cid. `/party` (Text 256) typed in chat like `/trade`, only for a leader or someone without a party ("You are already in a party", Text 257) | code `0x46a340` |
+| `C3 41` party answer | `[3]` 1 yes, 0 no, `[4..5]` the cid of `40` (BE) | code `0x4c4300` |
+| `C1 43` party leave | `[3]` member index: the X beside a member in the party window, shown beside every member for the leader (member 0), beside itself for the others | code `0x49c5b0` |
 | `C3 22` pick up | `[3..4]` item id BE. Sent when the hero is within 150 units of the item (1.5 tiles from the tile centre, the client walks there first) and the item fits in the grid (zen always), one at a time until `22` answers | code `0x4650a0` |
 | `C3 23` drop | `[3]` x `[4]` y (the tile under the mouse), `[5]` the slot the held item came from | code `0x497760` |
 | `C3 24` move | 11 bytes: `[3]` source window, `[4]` source slot, `[5..8]` the item as the client has it, `[9]` target window, `[10]` target slot. Windows and slots as in the result, the warehouse and the chaos machine while their window is open (into the box only mix materials, see [Chaos machine](#chaos-machine)). One at a time until `24` answers. The client also sends it on its own: arrows / bolts from the grid into a hand when a bow / crossbow has none (`0x463d60`), the left hand item to the right hand (`0x474ac0`) | code `0x422db0` |
@@ -520,6 +548,45 @@ grid marks the tiles; dropped there it sends `26 [3] jewel slot [4] item slot`, 
 jewel. Only on items below `0x183` (weapons, armor, wings 12/0..2) but arrows and bolts, bless up to +5, soul up to
 +8, life on any; not while the warehouse or a trade is open, not while item use is locked. The answer: `F3 14` with
 the item (the jewel leaves the cursor), `28` for the jewel's slot unlocks item use.
+
+## Chat
+
+From code. The chat input (`0x409e80`) sends the line as `00` with the hero's name, or as a whisper (`02`) when the
+whisper box holds a name. Before that, `0x46a340` takes the commands: `/trade` and `/exchange` (`36`), `/party`
+(`40`), `/guild` (`50`, M7); `/whisper off` and `/whisper on` (Text 264, 265) only switch the client's own whisper
+display. The log line type of `0x45e860`: 0 whisper, 1 system, 2 error, 3 chat, 4 party, 5 guild.
+
+The client shows neither its chat nor a party line itself, only its whispers. `~` and `@` lines carry the prefix in
+`00` both ways, the receiving client strips it.
+
+## Party
+
+From code. Up to 5 members are kept at `0x7d1f128`, 32 bytes each: `+0` name, `+11` index, `+12` map, `+13` x,
+`+14` y, `+16` life, `+20` max life (from `42`), `+24` life in tenths (from `44`); the count at `0x7dab738`, the
+cid of the last question at `0x7dab73c`, the window's open flag `0x7dab76d`.
+
+- The window (`0x4a44e0`, P) shows each member: the name (member 0, the leader, in red), the map name (Text 30 + map,
+  45 + map from map 10), `(x,y)`, a life bar and `(life / max life)`. An X beside a member sends `43` with its index:
+  beside every member for the leader, beside its own name for the others. Without members it shows the help texts.
+- Over the head of every player in view whose name is in the list (but the hero) a bar of `+24` tenths, 4 pixels
+  each, "HP : n0%" when pointed at (`0x480100`).
+
+## Trade
+
+From code. The partner's 8 x 4 grid is at `0x7da6960` (`38`, `39`), the own one at `0x7da9250` (`24` with window 1).
+`0x7daae8c` the partner's name, `0x7dab744` its level, `0x7dab748` its zen, `0x7dab74c` the own zen, `0x7dab754`
+the partner's ok, `0x7dab755` the own ok, `0x7dab740` set after the own ok was pressed once (a partner's change then
+makes the ok button ask), `0x7dab75c` frames before the ok button works again.
+
+1. A player types `/trade` next to another: `36` with the target's cid. The target gets `36` (C3) with the asker's
+   name and answers `37` 1 / 0.
+2. Both get `37` 1 with the other's name, level and guild: the window opens.
+3. Items move into the own grid with `24` (window 1, the server answers `24` as usual), the partner sees them come
+   and go with `39` / `38`. Zen: `3A` with the amount, answered by `3A`, the partner gets `3B`. The inventory window
+   shows the hero's money, which the dialog takes as what is left besides the trade's zen.
+4. Ok: `3C` 1 / 0, the partner sees it with `3C` 1 / 0, `3C` 2 takes back the own ok.
+5. The end: `3D` closes everything. The client keeps neither grid: the inventory comes with `F3 10`, the money with
+   `22 FE`.
 
 ## Client limits
 

@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 DEATH_LEVEL = 10  # dying loses exp from this level on
 DEATH_LOSS = 0.02  # of the exp between the level and the next, usual 0.97 value
 EXP_PACKET_MAX = 0xFFFF  # 16 carries 2 bytes of exp
+# % of a kill's exp shared by 2..5 party members, and by members of 3 classes or more, usual 0.97 values
+PARTY_BONUS = {2: 160, 3: 180, 4: 200, 5: 220}
+CLASS_BONUS = {2: 160, 3: 230, 4: 270, 5: 300}
 
 
 def monster_exp(player_level, monster_level, rate, rng=random):
@@ -36,22 +39,51 @@ def kill_shares(mob):
     return {c: dmg / whole for c, dmg in mob.damage_by.items() if dmg > 0}
 
 
+def party_exp(members, monster_level, rate, rng=random):
+    """
+    Connection -> exp of the party members sharing a kill: the monster's exp for their average level, with the
+    bonus for their count, more when they are of 3 classes or more, split by level. The usual 0.97 numbers, the
+    average level and the class rule are mup's.
+    """
+    total = sum(c.player.level for c in members)
+    exp = monster_exp(total // len(members), monster_level, rate, rng)
+    if len(members) > 1:
+        classes = {c.player.class_type.base for c in members}
+        exp = exp * (CLASS_BONUS if len(classes) >= 3 else PARTY_BONUS)[len(members)] / 100
+    return {c: exp * c.player.level / total for c in members}
+
+
+def sharing(c, mob):
+    """c's player may get exp for killing mob: in game, alive, with mob in view (16 for an object the client doesn't
+    have writes past its table)."""
+    p = c.player
+    return p is not None and c.connected and not p.dead and p.map_id == mob.map_id and mob in c.view
+
+
 def reward_kill(game, mob, killer, damage, magic):
     """
     mob died, killer's hit of damage did it: everyone who damaged it and is still around gets its share of the exp
     with 16 (shown with the last hit's damage) instead of a damage packet. 16 also tells the client the monster died.
-    The killer's hero swings at it unless it was magic (cid bit 15). Connections that got 16 are returned.
+    The share of a party member goes to the members around (party_exp). The killer's hero swings at it unless it
+    was magic (cid bit 15). Connections that got 16 are returned.
     """
-    got = []
+    rate = game.config.exp_rate
+    exp = {}
+    parties = {}
     for c, share in kill_shares(mob).items():
-        p = c.player
-        if p is None or p.dead or p.map_id != mob.map_id or not c.connected:
-            continue
-        exp = int(monster_exp(p.level, mob.info.level, game.config.exp_rate) * share)
-        gain(game, c, exp, mob.cid, damage, quiet=magic or c is not killer)
-        got.append(c)
+        if c.party is not None:
+            parties[c.party] = parties.get(c.party, 0) + share
+        elif sharing(c, mob):
+            exp[c] = exp.get(c, 0) + monster_exp(c.player.level, mob.info.level, rate) * share
+    for party, share in parties.items():
+        members = [c for c in party.members if sharing(c, mob)]
+        if members:
+            for c, value in party_exp(members, mob.info.level, rate).items():
+                exp[c] = exp.get(c, 0) + value * share
+    for c, value in exp.items():
+        gain(game, c, int(value), mob.cid, damage, quiet=magic or c is not killer)
     mob.damage_by = {}
-    return got
+    return list(exp)
 
 
 def gain(game, c, exp, killed, damage, quiet=False):

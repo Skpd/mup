@@ -119,6 +119,7 @@ class Player:
     direction: int = 0
     inventory: Dict[int, Item] = field(default_factory=dict)  # slot -> item, see mup.model.item
     chaos_box: Dict[int, Item] = field(default_factory=dict)  # slot (8 x 4) -> item put in the chaos machine
+    trade_box: Dict[int, Item] = field(default_factory=dict)  # slot (8 x 4) -> item put in a trade
     skills: List[Optional[int]] = field(default_factory=list)  # list slot -> skill number, None: free
     key_settings: Optional[bytes] = None  # F3 30 as the client sent it, [4..17]
     # in game only, times are the game clock (GameServer.now)

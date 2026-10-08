@@ -14,7 +14,7 @@ Packet codes are hex, details in `docs/protocol-097.md`. Where a code's meaning 
 | M3 items | done |
 | M4 combat and progression | done |
 | M5 NPCs, shops, warehouse, chaos machine | done |
-| M6 social: whisper, party, trade | todo |
+| M6 social: whisper, party, trade | done, real client check pending |
 | M7 guilds, quests, events, PK | todo |
 | B0 bots: session, hunting, levelling (after M2) | todo |
 | B1 bots: items, shops, map progression (after M3..M5) | todo |
@@ -476,6 +476,40 @@ Steps:
    A's kill gives B exp (`16`), leave; trade: request, accept, A puts in the sword and zen, a change resets the oks,
    both ok, the sword is B's after a restart, a cancelled trade gives A its items back. Then two real clients.
 
+Done:
+- Doc: [Chat](protocol-097.md#chat), [Party](protocol-097.md#party), [Trade](protocol-097.md#trade) and the packets
+  `00` / `02` both ways, `01`, `03`, `0B` (located, not reviewed), `0C`, `36`..`3D`, `40`..`44`, all from code. `36`
+  must be encrypted (its handler answers `F1 03` otherwise), the client sends `36`, `40`, `41`, `3C`, `3D` as C3 and
+  `00`, `02`, `37`, `3A`, `43` as C1. `/trade` and `/party` are chat commands the client handles (target within 1
+  tile), `/whisper off` is the client's own. `41` has no success value, a refusal shows "denied". The client's window
+  close empties both trade grids without putting the own items back, so every trade end comes with `F3 10` and `22 FE`.
+  `16` for a monster the client doesn't have writes past its object table.
+- Chat (`chat.py`): lines go to everyone in game under the speaker's real name, `~` lines to the party, `@` lines
+  wait for M7. Whispers by name (any case) on any map, `0C` when nobody has it.
+- Party (`party.py`, in memory): a request to a player in view, refused with `41` (full at 5, in another party, a level
+  gap of 120, gone), the answer within 60 s. The leader puts anyone out, the others leave, one left alone is out, the
+  next member leads when the leader leaves (mup's choice). `42` on each change and when a member moved, `44` every
+  2 s. Leaving the game leaves the party (`43` still goes to a client back at character select).
+- Exp share (`experience.py`): what a party member's damage earned goes to the members alive on the map who have the
+  monster in view (every exp `16` now needs it in view): the monster's exp for their average level, 160 / 180 / 200 /
+  220% for 2..5 members, 160 / 230 / 270 / 300% with 3 classes or more (usual 0.97 numbers, the average level and the
+  class rule mup's), split by level. `16` with bit 15 for the members who didn't hit.
+- Trade (`trade.py`, on the connections): a request to a free player (level 6, no window, no trade) in view within 5
+  tiles, the question waits 30 s. Items move with `24` window 1 into `Player.trade_box`, stored with the character
+  (owner `trade`, migration 5) and given back into the inventory when the trade ends or on the next entry after a
+  crash. Zen stays in the money until the exchange, the client is shown what is left. Any change takes back both
+  oks (`3C` 2 and 0). Both ok: room for everything on both sides (the bigger items placed first) and the money below
+  the limit, otherwise `3D` 2 to the side without room and everything back; the exchange saves both characters and
+  the trade (`trades`, `trade_items` with what each side gave) in one transaction. Cancel (`3D`), walking more than 5
+  tiles away, a relocation (map change, teleport, GM commands that refresh), death and leaving the game end it.
+  Nobody talks to NPCs or picks things up during a trade.
+- Test: whispers to B and to a name not in game, a party (`40`, `41`, `42` and `44` on both, party chat), A's energy
+  ball on the dragon gives B his share (`16` bit 15), B leaves (`43` to both); trades: refused (`37` 0), the sword and
+  5000 zen for nothing with a change taking back B's ok, the exchange (`3D` 1, `F3 10`, `22 FE`) logged and saved, a
+  canceled one and one ended by walking away giving A her item back, and after a restart the sword and zen are B's.
+- Left: guild chat and the guild mark in `37` (M7), murderers in parties and trades (M7), the party list's positions
+  update only every 2 s.
+
 ## M7 guilds, quests, events, PK
 
 - Guilds `50`..`56`, `5A`..`5D`, guild war `60`..`64`, 32 byte guild mark.
@@ -607,7 +641,6 @@ in Lorencia.
 
 ## Reverse engineering backlog
 
-- Unknown server packets: `01`, `0B`, `0C`, `1A`, `71`, `F1 04` / `05` / `12`, `F3 07` / `08` / `13` / `14` /
-  `20` / `22` / `23` / `30` / `40`.
-- Client packets missed by the sender index (whisper and others), and `97`, `98`, `A2`, `C1`.
-- Client chat layout `00`.
+- Unknown server packets: `01` and `0B` (located in M6, not reviewed), `03` (a check the client answers), `1A`,
+  `71`, `F1 04` / `05` / `12`, `F3 07` / `08` / `13` / `20` / `22` / `23` / `40`.
+- Client packets missed by the sender index, and `97`, `98`, `C1`.

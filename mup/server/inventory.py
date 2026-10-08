@@ -1,7 +1,7 @@
 """
 A player's inventory: the equipment slots and the 8 x 8 grid (mup.model.item), what may go where, moving and using
 items. Player.inventory maps the slot of an item (its top left tile in the grid) to the item. The other windows
-items move between (the vault, the chaos machine's box) are grids of 8 columns too, slots from 0.
+items move between (the vault, the chaos machine's box, the trade grid) are grids of 8 columns too, slots from 0.
 """
 import logging
 from collections import namedtuple
@@ -28,6 +28,7 @@ class Grid(namedtuple('Grid', 'start columns rows')):
 INVENTORY = Grid(GRID, GRID_SIZE, GRID_SIZE)
 WAREHOUSE = Grid(0, 8, 15)  # the client's 120 slots, the shop's too
 CHAOS_BOX = Grid(0, 8, 4)
+TRADE_BOX = Grid(0, 8, 4)
 GRID_END = INVENTORY.end
 SHOWN = range(PET + 1)  # equipment slots others see change (25), not the pendant and the rings
 AMMO = (BOLT, ARROWS)  # may share the hands with a two-handed bow / crossbow
@@ -113,7 +114,8 @@ def send(c):
 
 def windows(c):
     """Window number of 24 -> (slot -> item, Grid) c's player may move items between now: the inventory (with the
-    equipment below its grid), the vault or the chaos machine's box while its window is open."""
+    equipment below its grid), the vault or the chaos machine's box while its window is open, the trade grid while
+    a trade is open (mup.server.trade)."""
     p = c.player
     found = {SMoveItemResult.INVENTORY: (p.inventory, INVENTORY)}
     w = c.window
@@ -121,6 +123,8 @@ def windows(c):
         found[SMoveItemResult.WAREHOUSE] = (c.warehouse.items, WAREHOUSE)
     elif w is not None and w.kind == STalk.CHAOS_MACHINE:
         found[SMoveItemResult.CHAOS_MACHINE] = (p.chaos_box, CHAOS_BOX)
+    elif c.trade is not None and c.trade.open:
+        found[SMoveItemResult.TRADE] = (p.trade_box, TRADE_BOX)
     return found
 
 

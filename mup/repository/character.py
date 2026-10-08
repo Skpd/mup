@@ -30,6 +30,7 @@ class CharacterRepository:
         p.quest_state = bytes(p.quest_state)
         p.inventory = self._items(p.name, "character_id = ? AND owner = 'inventory'", p.id)
         p.chaos_box = self._items(p.name, "character_id = ? AND owner = 'chaos'", p.id)
+        p.trade_box = self._items(p.name, "character_id = ? AND owner = 'trade'", p.id)
         return p
 
     def _items(self, whose, where, key):
@@ -87,11 +88,32 @@ class CharacterRepository:
         """Writes what changes in game: stats, position, skills, items, and the account's vault when it was opened.
         One transaction, so an item that moved between them is stored once."""
         with self.db:
-            self.db.execute('UPDATE characters SET {}, class = ? WHERE id = ?'.format(
-                ', '.join(c + ' = ?' for c in SAVED)),
-                [getattr(p, COLUMNS[c]) for c in SAVED] + [p.class_type.value, p.id])
-            self._save_skills(p)
-            self._save_items(p, warehouse)
+            self._save(p, warehouse)
+
+    def save_trade(self, a, b, time):
+        """
+        Both characters of a trade that ended, each with its vault when it was opened, and the trade in the log, in
+        one transaction: the items that changed hands are stored once. a, b: (player, warehouse or None, the zen it
+        gave, the items it gave).
+        """
+        with self.db:
+            for p, warehouse, _, _ in (a, b):
+                self._save(p, warehouse)
+            cur = self.db.execute(
+                'INSERT INTO trades (time, a_character_id, b_character_id, a_name, b_name, a_zen, b_zen) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?)', (int(time), a[0].id, b[0].id, a[0].name, b[0].name, a[2], b[2]))
+            self.db.executemany(
+                'INSERT INTO trade_items (trade_id, side, serial, type, {}) VALUES (?, ?, ?, ?, {})'.format(
+                    ', '.join(ITEM_COLUMNS), ', '.join('?' * len(ITEM_COLUMNS))),
+                [(cur.lastrowid, side, item.serial, item.type) + tuple(int(getattr(item, c)) for c in ITEM_COLUMNS)
+                 for side, (_, _, _, items) in (('a', a), ('b', b)) for item in items])
+
+    def _save(self, p, warehouse):
+        self.db.execute('UPDATE characters SET {}, class = ? WHERE id = ?'.format(
+            ', '.join(c + ' = ?' for c in SAVED)),
+            [getattr(p, COLUMNS[c]) for c in SAVED] + [p.class_type.value, p.id])
+        self._save_skills(p)
+        self._save_items(p, warehouse)
 
     def save_key_settings(self, p: Player):
         with self.db:
@@ -104,9 +126,11 @@ class CharacterRepository:
 
     def _save_items(self, p, warehouse=None):
         # an item that changed hands may still be stored with its last owner: REPLACE takes it over by its serial
-        self.db.execute("DELETE FROM items WHERE character_id = ? AND owner IN ('inventory', 'chaos')", (p.id,))
+        self.db.execute("DELETE FROM items WHERE character_id = ? AND owner IN ('inventory', 'chaos', 'trade')",
+                        (p.id,))
         rows = [('inventory', p.id, None, slot, item) for slot, item in p.inventory.items()]
         rows += [('chaos', p.id, None, slot, item) for slot, item in p.chaos_box.items()]
+        rows += [('trade', p.id, None, slot, item) for slot, item in p.trade_box.items()]
         if warehouse is not None:
             self.db.execute("DELETE FROM items WHERE account_id = ? AND owner = 'warehouse'", (warehouse.account_id,))
             rows += [('warehouse', None, warehouse.account_id, slot, item) for slot, item in warehouse.items.items()]

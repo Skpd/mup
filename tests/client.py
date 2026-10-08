@@ -1508,6 +1508,175 @@ def windows(t):
           'is refused: 32 FF'.format(helms))
 
 
+def party_list(p):
+    """(name, index, map, x, y, life, max life) of a 42 party list: count at [4], 24 bytes each from [5]."""
+    check(len(p) == 5 + 24 * p[4], '42 has 24 byte entries: ' + p.hex(' '))
+    return [(text(e[0:10]), e[10], e[11], e[12], e[13], le32(e[16:20]), le32(e[20:24]))
+            for e in (p[5 + i * 24:5 + (i + 1) * 24] for i in range(p[4]))]
+
+
+def social(t):
+    """Whispers, a party sharing a kill, trades."""
+    a, servers, db_path = t.a, t.servers, t.db_path
+    print('A enters again, B comes back')
+    logout(a, 1)
+    info = enter(a, 'Alice')
+    a_items, a_money = info['inventory'], info['money']
+    b = login_ok('bob', 'pw2')
+    info = enter(b, 'Bobby')
+    b_money = info['money']
+    b.send(chat('Bobby', '/level 10'))
+    b.recv_until(key(0x0D), what='level notice')
+
+    print('whispers')
+    a.send([0xC1, 0, 0x02, *name10('bobby'), *b'psst\0'])
+    p = b.recv_until(key(0x02), what='whisper')
+    check(text(p[3:13]) == 'Alice' and text(p[13:]) == 'psst', 'B gets A\'s whisper (02), name at 3, text at 13: '
+          + p.hex(' '))
+    a.send([0xC1, 0, 0x02, *name10('Nobody'), *b'anyone?\0'])
+    p = a.recv_until(key(0x0C), what='not in game')
+    check(len(p) == 4 and p[3] == 0, 'a whisper to a name not in game: 0C 0')
+
+    print('a party')
+    gm_move(a, 'Alice', 0, *near_tile(DRAGON_SPOT, 8))
+    dragon, dragon_xy = meet(a, 2)[0]
+    a_spot = near_tile(dragon_xy, 4)
+    gm_move(a, 'Alice', 0, *a_spot)
+    b_spot = near_tile(a_spot, 2)
+    gm_move(b, 'Bobby', 0, *b_spot)
+    a.recv_until(listed(0x12, b.cid), what='A sees B')
+    a.send([0xC1, 0, 0x40, b.cid >> 8, b.cid & 0xFF], encrypt=True)
+    p = b.recv_until(key(0x40), what='party question')
+    check(len(p) == 5 and (p[3] << 8 | p[4]) == a.cid, 'B is asked to party by A: 40 with her cid')
+    b.send([0xC1, 0, 0x41, 1, a.cid >> 8, a.cid & 0xFF], encrypt=True)
+    for conn in (a, b):
+        members = party_list(conn.recv_until(key(0x42), what='party list'))
+        check([m[:3] for m in members] == [('Alice', 0, 0), ('Bobby', 1, 0)] and all(m[5] <= m[6] for m in members),
+              '{} gets the list, Alice leads: {}'.format(conn.name, members))
+        p = conn.recv_until(key(0x44), what='party life')
+        check(len(p) == 6 and p[3] == 2 and [v >> 4 for v in p[4:6]] == [0, 1] and all(v & 0x0F <= 10 for v in p[4:6]),
+              '44: index << 4 | life in tenths per member: ' + p.hex(' '))
+    b.send(chat('Bobby', '~hi party'))
+    for conn in (a, b):
+        p = conn.recv_until(lambda p: p.head == 0x00 and text(p[13:]) == '~hi party', what='party chat')
+        check(text(p[3:13]) == 'Bobby', '{} gets the party line with its ~'.format(conn.name))
+
+    print('A kills the dragon, B shares the exp')
+    b.inbox.clear()
+    for i in range(10):
+        a.send([0xC1, 0, 0x19, 0x00, dragon >> 8, dragon & 0xFF], encrypt=True)
+        p = a.recv_until(lambda p: p.head in (0x15, 0x16) and (p[3] << 8 | p[4]) & 0x7FFF == dragon,
+                         what='energy ball on the dragon')
+        if p.head == 0x16:
+            break
+        time.sleep(ATTACK_PAUSE)
+    check(p.head == 0x16 and exp16(p) > 0, 'A kills the dragon: 16 with {} exp'.format(exp16(p)))
+    p = b.recv_until(lambda p: p.head == 0x16 and (p[3] << 8 | p[4]) & 0x7FFF == dragon, what='B\'s share')
+    check(p[3] & 0x80 and exp16(p) > 0, 'B gets {} exp of it without a swing: 16 with bit 15'.format(exp16(p)))
+    b.send([0xC1, 0, 0x43, 1])
+    p = b.recv_until(key(0x43), what='left')
+    check(len(p) == 3, 'B leaves (43 with his index), 43 back')
+    a.recv_until(key(0x43), what='alone')
+    check(True, 'A, left alone, is out too: 43')
+
+    print('trade: refused, then the sword and zen for nothing')
+    sword_slot, sword = next((s, i) for s, i in sorted(a_items.items()) if s >= 12 and item_type(i) == 1)
+    a.send([0xC1, 0, 0x36, b.cid >> 8, b.cid & 0xFF], encrypt=True)
+    p = b.recv_until(key(0x36), what='trade question')
+    check(p.encrypted and len(p) == 13 and text(p[3:13]) == 'Alice', 'B is asked: C3 36 with her name at 3')
+    b.send([0xC1, 0, 0x37, 0])
+    p = a.recv_until(key(0x37), what='refused')
+    check(len(p) == 20 and p[3] == 0, 'B says no: A gets 37 0')
+    a.send([0xC1, 0, 0x36, b.cid >> 8, b.cid & 0xFF], encrypt=True)
+    b.recv_until(key(0x36), what='trade question')
+    b.send([0xC1, 0, 0x37, 1])
+    for conn, partner, level in ((a, 'Bobby', 10), (b, 'Alice', None)):
+        p = conn.recv_until(key(0x37), what='trade open')
+        check(len(p) == 20 and p[3] == 1 and text(p[4:14]) == partner and (level is None or p[14] | p[15] << 8 == level),
+              '{} gets 37 1 with {} at 4 and the level at 14: {}'.format(conn.name, partner, p.hex(' ')))
+    p = move_between(a, 0, sword_slot, sword, 1, 0)
+    check((p[3], p[4]) == (1, 0), 'A puts the sword into her trade grid: 24 window 1 slot 0')
+    p = b.recv_until(key(0x39), what='partner item')
+    check(len(p) == 8 and p[3] == 0 and bytes(p[4:8]) == sword, 'B sees it: 39 slot 0 with the item')
+    a.send([0xC1, 0, 0x3A, 0, *struct.pack('<I', 5000)])
+    p = a.recv_until(key(0x22), what='money left')
+    check(p[3] == 0xFE and be32(p[4:8]) == a_money - 5000, 'A puts in 5000 zen: 22 FE with what is left')
+    check(a.recv_until(key(0x3A), what='zen result')[3] == 1, '3A 1')
+    p = b.recv_until(key(0x3B), what='partner zen')
+    check(len(p) == 8 and le32(p[4:8]) == 5000, 'B sees it: 3B 5000')
+    b.send([0xC1, 0, 0x3C, 1], encrypt=True)
+    check(a.recv_until(key(0x3C), what='partner ok')[3] == 1, 'B is ok, A sees it: 3C 1')
+    p = move_between(a, 1, 0, sword, 1, 2)
+    check((p[3], p[4]) == (1, 2), 'A moves the sword in her grid')
+    check(b.recv_until(key(0x38), what='item gone')[3] == 0 and b.recv_until(key(0x39), what='item')[3] == 2,
+          'B sees it go from slot 0 (38) to slot 2 (39)')
+    check(b.recv_until(key(0x3C), what='own ok off')[3] == 2 and a.recv_until(key(0x3C), what='partner ok off')[3] == 0,
+          'the change takes back B\'s ok: 3C 2 to him, 3C 0 to A')
+    b.send([0xC1, 0, 0x3C, 1], encrypt=True)
+    a.recv_until(key(0x3C), what='partner ok')
+    a.send([0xC1, 0, 0x3C, 1], encrypt=True)
+    for conn, money in ((a, a_money - 5000), (b, b_money + 5000)):
+        p = conn.recv_until(key(0x3D), what='trade done')
+        check(len(p) == 4 and p[3] == 1, 'both ok: {} gets 3D 1'.format(conn.name))
+        items_now = inventory(conn)
+        p = conn.recv_until(key(0x22), what='money')
+        check(p[3] == 0xFE and be32(p[4:8]) == money, '{}: the inventory (F3 10) and the money {} (22 FE)'.format(
+            conn.name, money))
+        if conn is a:
+            check(sword_slot not in items_now, 'the sword left A\'s inventory')
+        else:
+            check(sword in items_now.values(), 'B has the sword')
+    with sqlite3.connect(db_path) as db:
+        trade = db.execute('SELECT id, a_name, b_name, a_zen, b_zen FROM trades').fetchone()
+        given = db.execute('SELECT side, serial, type FROM trade_items WHERE trade_id = ?', (trade[0],)).fetchall()
+        owner = db.execute('SELECT c.name, i.owner FROM items i JOIN characters c ON c.id = i.character_id '
+                           'WHERE i.serial = ?', (given[0][1],)).fetchone()
+    check(trade[1:] == ('Alice', 'Bobby', 5000, 0) and [(g[0], g[2]) for g in given] == [('a', 1)]
+          and owner == ('Bobby', 'inventory'), 'the trade is logged and saved: {} {} {}'.format(trade, given, owner))
+
+    print('a canceled trade gives everything back')
+    item_slot, item = next((s, i) for s, i in sorted(a_items.items()) if s >= 12 and s != sword_slot)
+    a.send([0xC1, 0, 0x36, b.cid >> 8, b.cid & 0xFF], encrypt=True)
+    b.recv_until(key(0x36), what='trade question')
+    b.send([0xC1, 0, 0x37, 1])
+    a.recv_until(key(0x37), what='trade open')
+    move_between(a, 0, item_slot, item, 1, 0)
+    a.send([0xC1, 0, 0x3A, 0, *struct.pack('<I', 1000)])
+    a.recv_until(key(0x22), what='money left')
+    a.recv_until(key(0x3A), what='zen result')
+    b.send([0xC1, 0, 0x3D], encrypt=True)
+    for conn in (a, b):
+        check(conn.recv_until(key(0x3D), what='canceled')[3] == 0, '{} gets 3D 0'.format(conn.name))
+    items_now = inventory(a)
+    p = a.recv_until(key(0x22), what='money back')
+    check(items_now.get(item_slot) == item and be32(p[4:8]) == a_money - 5000,
+          'A has her item back in its slot and all her money: ' + p.hex(' '))
+
+    print('walking away ends a trade')
+    a.send([0xC1, 0, 0x36, b.cid >> 8, b.cid & 0xFF], encrypt=True)
+    b.recv_until(key(0x36), what='trade question')
+    b.send([0xC1, 0, 0x37, 1])
+    a.recv_until(key(0x37), what='trade open')
+    move_between(a, 0, item_slot, item, 1, 0)
+    walk_path(b, b_spot, near_tile(b_spot, 8))
+    for conn in (a, b):
+        check(conn.recv_until(key(0x3D), what='walked away')[3] == 0, '{} gets 3D 0'.format(conn.name))
+    check(inventory(a).get(item_slot) == item, 'A has her item back')
+
+    print('restart, the sword stays B\'s')
+    servers['bin/gs.py'].stop()
+    a.s.close()
+    b.s.close()
+    servers['bin/gs.py'].start()
+    b = login_ok('bob', 'pw2')
+    info = enter(b, 'Bobby')
+    check(sword in info['inventory'].values() and info['money'] == b_money + 5000, 'Bobby has the sword and the zen')
+    a = login_ok('alice', 'pw1')
+    info = enter(a, 'Alice')
+    check(info['inventory'].get(sword_slot) != sword and info['money'] == a_money - 5000, 'Alice has neither')
+    t.a, t.b = a, b
+
+
 def play(servers, db_path):
     """The test, area by area. t carries the clients and what one area leaves for the next."""
     t = SimpleNamespace(servers=servers, db_path=db_path)
@@ -1526,6 +1695,7 @@ def play(servers, db_path):
     jewels(t)
     chaos_machine(t)
     windows(t)
+    social(t)
 
 def port_open(port):
     try:

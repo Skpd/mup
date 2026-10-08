@@ -3,7 +3,8 @@ import random
 from mup.model.item import RIGHT_HAND, LEFT_HAND, HELM, ARMOR, PANTS, GLOVES, BOOTS, ARROWS, BOLT
 from mup.model.monster import Monster
 from mup.packet.server import SDamage, SKill, SLife, SMana, SRespawn, SDurability, SItemDeleted
-from mup.server import effect, experience, ground, inventory, item as items, loot, monster, stats, summon, view
+from mup.server import (effect, experience, ground, inventory, item as items, loot, monster, stats, summon, trade,
+                        view)
 from mup.server.character import respawn_gate
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,7 @@ def kill_player(game, c, killer):
     p = c.player
     p.life = 0
     p.respawn_at = game.now + RESPAWN_DELAY
+    trade.cancel(game, c)
     effect.clear(game, c)
     summon.dismiss(game, c)
     experience.death_loss(p)

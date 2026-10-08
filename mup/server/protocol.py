@@ -44,6 +44,9 @@ class BaseProtocol(Protocol):
         self.window = None  # the NPC window open, mup.server.npc.Window
         self.warehouse = None  # the account's vault once opened, saved with the character (mup.server.warehouse)
         self.stale_box = False  # the client may still show items in its chaos machine box, mup.server.chaos
+        self.trade = None  # the trade asked for or open, mup.server.trade.Trade
+        self.party = None  # mup.server.party.Party
+        self.party_question = None  # (connection, time) of who asked to party last, mup.server.party
 
     @property
     def tag(self):

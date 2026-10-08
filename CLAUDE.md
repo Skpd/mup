@@ -29,7 +29,7 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   what may be worn, moves between windows, potions, scrolls), `ground.py` (items on the ground, drop, pick up),
   `loot.py` (monster drops), `npc.py` (NPC windows, talking), `shop.py` (shops, the client's prices, buy, sell,
   repair), `warehouse.py`, `chaos.py` (chaos machine mixes), `jewel.py`, `command.py` (GM commands in chat),
-  `connect.py`,
+  `chat.py` (chat, whispers), `party.py`, `trade.py`, `connect.py`,
   `handler/*` (one per packet, registered in `bin/gs.py` / `bin/cs.py`), `character.py` (creation rules, start
   and respawn gates). Game time is `GameServer.now`, the tick passes it on.
 - `mup/model/` dataclasses. `mup/repository/`: SQLite storage (`database.py` schema migrations, account and
@@ -56,7 +56,7 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   combat, magic, drops, picking up, wearing and dropping items, a potion, disconnect, relog, GM commands, level up
   points, skills (scrolls, area hits, poison, teleport, weapon skills, an elf's buff, arrows, summons), monsters
   chasing and killing, respawn and a gate, NPCs (shops, wear and repair, the vault across a restart, a jewel, a
-  mix, a trap), one function per area. Run it after every change and extend it with every feature. It checks raw
+  mix, a trap), whispers, a party sharing a kill and trades, one function per area. Run it after every change and extend it with every feature. It checks raw
   offsets from the doc, never the packet definitions, so a wrong definition fails it.
 - The real client is the final check: ask the user to try it and paste the log.
 

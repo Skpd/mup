@@ -128,6 +128,55 @@ MIGRATIONS = [
     CREATE INDEX items_character ON items (character_id);
     CREATE INDEX items_account ON items (account_id);
     """,
+    # roadmap M6: items put in a trade are kept with their character (owner 'trade', slot 0..31) until it ends, the
+    # table is rebuilt for the CHECK. Every trade is logged with what each side gave (trades, trade_items)
+    """
+    CREATE TABLE items_new (
+        id INTEGER PRIMARY KEY,
+        serial INTEGER NOT NULL UNIQUE,
+        owner TEXT NOT NULL CHECK (owner IN ('inventory', 'warehouse', 'chaos', 'trade')),
+        character_id INTEGER REFERENCES characters (id) ON DELETE CASCADE,
+        account_id INTEGER REFERENCES accounts (id),
+        slot INTEGER NOT NULL,
+        type INTEGER NOT NULL,
+        level INTEGER NOT NULL DEFAULT 0,
+        durability INTEGER NOT NULL DEFAULT 0,
+        skill INTEGER NOT NULL DEFAULT 0,
+        luck INTEGER NOT NULL DEFAULT 0,
+        option INTEGER NOT NULL DEFAULT 0,
+        excellent INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO items_new SELECT * FROM items;
+    DROP TABLE items;
+    ALTER TABLE items_new RENAME TO items;
+    CREATE INDEX items_character ON items (character_id);
+    CREATE INDEX items_account ON items (account_id);
+    CREATE TABLE trades (
+        id INTEGER PRIMARY KEY,
+        time INTEGER NOT NULL,
+        a_character_id INTEGER REFERENCES characters (id) ON DELETE SET NULL,
+        b_character_id INTEGER REFERENCES characters (id) ON DELETE SET NULL,
+        a_name TEXT NOT NULL,
+        b_name TEXT NOT NULL,
+        a_zen INTEGER NOT NULL,
+        b_zen INTEGER NOT NULL
+    );
+    CREATE TABLE trade_items (
+        id INTEGER PRIMARY KEY,
+        trade_id INTEGER NOT NULL REFERENCES trades (id) ON DELETE CASCADE,
+        side TEXT NOT NULL CHECK (side IN ('a', 'b')),
+        serial INTEGER NOT NULL,
+        type INTEGER NOT NULL,
+        level INTEGER NOT NULL,
+        durability INTEGER NOT NULL,
+        skill INTEGER NOT NULL,
+        luck INTEGER NOT NULL,
+        option INTEGER NOT NULL,
+        excellent INTEGER NOT NULL
+    );
+    CREATE INDEX trade_items_trade ON trade_items (trade_id);
+    CREATE INDEX trade_items_type ON trade_items (type);
+    """,
 ]
 
 

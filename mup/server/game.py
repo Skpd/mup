@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections import Counter, deque
 from itertools import count
 from mup.config import Config
@@ -8,8 +9,8 @@ from mup.packet.server import SServerJoin, SStats, SMeetPlayer, SSkillList, SMov
 from mup.repository import database
 from mup.repository.account import AccountRepository
 from mup.repository.character import CharacterRepository
-from mup.server import (ai, chaos, combat, effect, gate, ground, inventory, item, loot, monster, npc, shop, skill,
-                        stats, summon, view)
+from mup.server import (ai, chaos, combat, effect, gate, ground, inventory, item, loot, monster, npc, party, shop,
+                        skill, stats, summon, trade, view)
 from mup.server.base import ServerBase
 from mup.server.character import respawn_gate
 from mup.server.world import load_maps
@@ -72,6 +73,7 @@ class GameServer(ServerBase):
         logger.info('%s item types, fixed drops for %s monster types, %s shops', len(self.item_info),
                     len(self.fixed_drops), len(self.shops))
 
+        self.parties = set()  # mup.server.party.Party
         self.next_save = now + config.autosave_interval
         self.task = None
 
@@ -113,6 +115,8 @@ class GameServer(ServerBase):
             self._run(effect.tick, self, now)
         for c in self.playing():
             self._run(self._player_tick, c, now)
+        if self.parties:
+            self._run(party.tick, self, now)
         if now >= self.next_save:
             self.next_save = now + self.config.autosave_interval
             self._run(self.save_all)
@@ -128,6 +132,7 @@ class GameServer(ServerBase):
     def _player_tick(self, c, now):
         p = c.player
         npc.check(self, c)
+        trade.check(self, c)
         if p.respawn_at is not None:
             if now >= p.respawn_at:
                 combat.respawn(self, c)
@@ -168,6 +173,7 @@ class GameServer(ServerBase):
         p.values = stats.compute(p)
         p.life, p.mana = min(p.life, p.max_life), min(p.mana, p.max_mana)
         chaos.return_items(self, c, notify=False)  # left in the chaos machine without room, the inventory goes below
+        trade.return_items(self, c, notify=False)  # left in a trade by a crash
         skill.update_weapon_skills(self, c, notify=False)  # the list goes out below
         # no weather packet (0x0F): this client ignores what other versions send on join
         c.write(SStats.of(p))
@@ -182,6 +188,8 @@ class GameServer(ServerBase):
     def leave_world(self, c):
         """Saves the character of connection c and takes it out of the game, the account stays logged in."""
         npc.close(self, c, leaving=True)
+        trade.cancel(self, c, leaving=True)
+        party.leave(self, c)
         effect.clear(self, c)
         summon.dismiss(self, c)
         self.save(c)
@@ -206,6 +214,7 @@ class GameServer(ServerBase):
         """
         p = c.player
         npc.close(self, c, notify=True)  # F3 04 closes the client's NPC windows, 1C its vault
+        trade.cancel(self, c)
         if map_id != p.map_id:
             summon.dismiss(self, c)
         view.forget(self, c)
@@ -231,6 +240,15 @@ class GameServer(ServerBase):
             self.characters.save(c.player, c.warehouse)
         except Exception:
             logger.exception('Failed to save %s', c.player.name)
+
+    def save_trade(self, a, b):
+        """Both characters of a trade that changed hands, with the trade in the log, in one transaction. a, b:
+        (connection, the zen it gave, the items it gave). A failed write is logged, the game goes on."""
+        try:
+            self.characters.save_trade(*[(c.player, c.warehouse, zen, items) for c, zen, items in (a, b)],
+                                       time=time.time())
+        except Exception:
+            logger.exception('Failed to save the trade of %s and %s', a[0].player.name, b[0].player.name)
 
     def save_all(self):
         players = self.playing()

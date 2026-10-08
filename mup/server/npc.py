@@ -2,7 +2,7 @@
 NPCs: the later server's section 0 spawns of the types this client has (mup.server.monster.NPC_TYPES), standing at
 their spot in the monsters' ids, shown with 13. Nobody hits them, only traps act (mup.server.ai). Talking (30) opens
 the NPC's window, one at a time, kept on the connection until the client closes it (31, 82, 87), the player walks
-away, dies, changes the map or leaves the game.
+away, dies, changes the map or leaves the game. Nobody talks during a trade.
 """
 import logging
 from dataclasses import dataclass
@@ -40,7 +40,7 @@ def talk(game, c, cid):
     """30: c's player talks to the NPC cid, near and in view: the window of the NPC replaces the one open."""
     p = c.player
     npc = game.monsters.get(cid)
-    if p.dead or npc is None or not npc.npc or npc not in c.view or distance(p.x, p.y, npc.x, npc.y) > TALK_RANGE:
+    if p.dead or c.trade is not None or npc is None or not npc.npc or npc not in c.view or distance(p.x, p.y, npc.x, npc.y) > TALK_RANGE:
         logger.debug('%s can\'t talk to %s', p.name, cid)
         return False
     kind = window_of(game, npc.type_id)

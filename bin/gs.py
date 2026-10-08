@@ -8,7 +8,7 @@ from mup.server.handler.action import action_handler
 from mup.server.handler.add_point import add_point_handler
 from mup.server.handler.attack import attack_handler
 from mup.server.handler.char_list import char_list_handler
-from mup.server.handler.chat import chat_handler
+from mup.server.handler.chat import chat_handler, whisper_handler
 from mup.server.handler.close import close_handler
 from mup.server.handler.create_character import create_character_handler
 from mup.server.handler.delete_character import delete_character_handler
@@ -23,7 +23,10 @@ from mup.server.handler.move import move_handler
 from mup.server.handler.move_gate import move_gate_handler
 from mup.server.handler.npc import (talk_handler, close_window_handler, buy_handler, sell_handler, repair_handler,
                                     warehouse_money_handler, warehouse_close_handler, mix_handler, chaos_close_handler)
+from mup.server.handler.party import party_request_handler, party_answer_handler, party_leave_handler
 from mup.server.handler.ping import ping_handler
+from mup.server.handler.trade import (trade_request_handler, trade_answer_handler, trade_zen_handler,
+                                      trade_ok_handler, trade_cancel_handler)
 from mup.server.protocol import BaseProtocol
 
 logger = logging.getLogger('gs')
@@ -52,6 +55,15 @@ def create_gs(loop, cfg):
     gs.add_handler(0x86, None, mix_handler)
     gs.add_handler(0x87, None, chaos_close_handler)
     gs.add_handler(0x00, None, chat_handler)
+    gs.add_handler(0x02, None, whisper_handler)
+    gs.add_handler(0x36, None, trade_request_handler)
+    gs.add_handler(0x37, None, trade_answer_handler)
+    gs.add_handler(0x3A, None, trade_zen_handler)
+    gs.add_handler(0x3C, None, trade_ok_handler)
+    gs.add_handler(0x3D, None, trade_cancel_handler)
+    gs.add_handler(0x40, None, party_request_handler)
+    gs.add_handler(0x41, None, party_answer_handler)
+    gs.add_handler(0x43, None, party_leave_handler)
     gs.add_handler(0x0E, 0x00, ping_handler)
     gs.add_handler(0xF3, 0x00, char_list_handler)
     gs.add_handler(0xF3, 0x01, create_character_handler)

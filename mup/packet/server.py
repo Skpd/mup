@@ -38,6 +38,15 @@ from mup.packet.server_packet.npc import (Talk as Talk097, ItemList as ItemList0
                                           SellResult as SellResult097, RepairResult as RepairResult097,
                                           WarehouseMoney as WarehouseMoney097, WarehouseClosed as WarehouseClosed097,
                                           MixResult as MixResult097, ChaosClosed as ChaosClosed097)
+from mup.packet.server_packet.chat import (Chat as Chat097, Whisper as Whisper097,
+                                           WhisperFailed as WhisperFailed097)
+from mup.packet.server_packet.party import (PartyRequest as PartyRequest097, PartyResult as PartyResult097,
+                                            PartyList as PartyList097, PartyLeft as PartyLeft097,
+                                            PartyLife as PartyLife097)
+from mup.packet.server_packet.trade import (TradeRequest as TradeRequest097, TradeAnswer as TradeAnswer097,
+                                            TradeItemGone as TradeItemGone097, TradeItem as TradeItem097,
+                                            TradeZen as TradeZen097, PartnerZen as PartnerZen097,
+                                            TradeOk as TradeOk097, TradeEnd as TradeEnd097)
 
 
 SServerList = ServerList097
@@ -93,3 +102,19 @@ SWarehouseMoney = WarehouseMoney097
 SWarehouseClosed = WarehouseClosed097
 SMixResult = MixResult097
 SChaosClosed = ChaosClosed097
+SChat = Chat097
+SWhisper = Whisper097
+SWhisperFailed = WhisperFailed097
+SPartyRequest = PartyRequest097
+SPartyResult = PartyResult097
+SPartyList = PartyList097
+SPartyLeft = PartyLeft097
+SPartyLife = PartyLife097
+STradeRequest = TradeRequest097
+STradeAnswer = TradeAnswer097
+STradeItemGone = TradeItemGone097
+STradeItem = TradeItem097
+STradeZen = TradeZen097
+SPartnerZen = PartnerZen097
+STradeOk = TradeOk097
+STradeEnd = TradeEnd097
