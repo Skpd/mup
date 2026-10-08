@@ -22,6 +22,9 @@ from mup.packet.server_packet.magic import Magic as Magic097
 from mup.packet.server_packet.magic_aoe import MagicAOE as MagicAOE097
 from mup.packet.server_packet.skill_list import SkillList as SkillList097
 from mup.packet.server_packet.action import Action as Action097
+from mup.packet.server_packet.map_move import MapMove as MapMove097
+from mup.packet.server_packet.respawn import Respawn as Respawn097
+from mup.packet.server_packet.life import Life as Life097, Mana as Mana097
 
 
 SServerList = ServerList097
@@ -48,3 +51,7 @@ SMagic = Magic097
 SMagicAOE = MagicAOE097
 SSkillList = SkillList097
 SAction = Action097
+SMapMove = MapMove097
+SRespawn = Respawn097
+SLife = Life097
+SMana = Mana097

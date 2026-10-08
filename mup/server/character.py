@@ -1,5 +1,4 @@
-"""Character creation rules."""
-import random
+"""Character creation rules, start and respawn places."""
 import re
 from mup.model.player import Player, CharacterClass, DEFAULT_SKILLS
 
@@ -8,9 +7,13 @@ NAME = re.compile('[A-Za-z0-9]{3,10}')
 BASE_CLASSES = {CharacterClass.DARK_WIZARD, CharacterClass.DARK_KNIGHT, CharacterClass.ELF,
                 CharacterClass.MAGIC_GLADIATOR}
 
-# where new characters start: map and the area of a gate in Move/Gate.txt, 17 in Lorencia, 27 in Noria for elves
-START = (0, range(133, 152), range(118, 136))
-START_BY_CLASS = {CharacterClass.ELF: (3, range(171, 178), range(108, 118))}
+# town gates of the client's Gate.bmd: new characters start in Lorencia, elves in Noria
+LORENCIA, DEVIAS, NORIA = 17, 22, 27
+START_GATE = LORENCIA
+START_GATE_BY_CLASS = {CharacterClass.ELF: NORIA}
+# where the dead come back by the map they died on: Devias for Devias, Lost Tower and Icarus, Noria for Noria,
+# Lorencia for the others. Usual rules, not from the client
+RESPAWN_GATES = {2: DEVIAS, 3: NORIA, 4: DEVIAS, 10: DEVIAS}
 
 
 def valid_name(name):
@@ -27,9 +30,15 @@ def creatable_class(value):
     return class_type if class_type in BASE_CLASSES else None
 
 
-def new_character(account_id, slot, name, class_type: CharacterClass):
-    """A level 1 character at a random spot of its start area."""
-    map_id, xs, ys = START_BY_CLASS.get(class_type, START)
-    # todo the area has walls and a fountain, pick a walkable spot once the terrain is loaded (roadmap M2)
-    return Player.new(class_type, account_id=account_id, index=slot, name=name, map_id=map_id,
-                      x=random.choice(xs), y=random.choice(ys), skills=list(DEFAULT_SKILLS.get(class_type, [])))
+def start_gate(class_type: CharacterClass):
+    return START_GATE_BY_CLASS.get(class_type.base, START_GATE)
+
+
+def respawn_gate(map_id):
+    return RESPAWN_GATES.get(map_id, LORENCIA)
+
+
+def new_character(account_id, slot, name, class_type: CharacterClass, map_id, x, y):
+    """A level 1 character at map_id x, y."""
+    return Player.new(class_type, account_id=account_id, index=slot, name=name, map_id=map_id, x=x, y=y,
+                      skills=list(DEFAULT_SKILLS.get(class_type, [])))

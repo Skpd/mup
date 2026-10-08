@@ -10,12 +10,16 @@ Packet codes are hex, details in `docs/protocol-097.md`. Where a code's meaning 
 |---|---|
 | M0 protocol fixes, housekeeping | done |
 | M1 persistence, character select flow | done |
-| M2 world: maps, gates, monsters | todo |
+| M2 world: maps, gates, monsters | done |
 | M3 items | todo |
 | M4 combat and progression | todo |
 | M5 NPCs, shops, warehouse, chaos machine | todo |
 | M6 social: whisper, party, trade | todo |
 | M7 guilds, quests, events, PK | todo |
+| B0 bots: session, hunting, levelling (after M2) | todo |
+| B1 bots: items, shops, map progression (after M3..M5) | todo |
+| B2 bots: party, whisper, trade (after M6) | todo |
+| B3 bots: guilds, quests, events (after M7) | todo |
 
 ## M0 protocol fixes, housekeeping
 
@@ -106,6 +110,38 @@ Done:
 
 Done when: walk from Lorencia to Noria through a gate, monsters chase and hit, dying respawns in town.
 
+Done:
+- Client data in `data/`: the client's terrains (`World{n+1}/Terrain{n+1}.att`, 4 maps differ from the server's
+  `Data/Terrain`), its `Gate.bmd`, the server's `Monster.txt` / `MonsterSetBase.txt` (`[world]` in `config.ini`).
+  Terrain and gate formats, walkable bits (`0x04` wall, `0x08` no ground), the respawn, life, mana, map move and
+  map loaded packets confirmed in the client's code, see the doc.
+- `mup/server/world.py`: maps with an 8 x 8 cell grid each for players and monsters, `view.py` keeps what every
+  client has in view (`c.view`) and sends `12` / `13` / `14` as players and monsters come and go, replacing the
+  distance scans. `tools/map_view_wip.py` and the `move_strategy` modules are gone.
+- Walks: the start must be walkable and within 15 tiles of the server's position, the walk stops before the first
+  blocked step. New characters and respawns get a walkable tile of their gate area.
+- Gates (`gate.py`): the request is accepted when the player's position or last walk is in the entrance area and
+  the level is enough (MG two thirds), then `C3 1C` and everything in view again. The client's gate table has no
+  gates to Lost Tower, Atlans, Tarkan and Icarus, their monsters wait for a warp command.
+- One tick of 100 ms (`GameServer.run`) for monster AI (only monsters within 20 tiles of a player act), respawns,
+  player respawn, regen and autosave. `mup/common/interval.py` is gone. 40 players among the real spawns: about 1 ms
+  per tick.
+- Monsters (`monster.py`, `ai.py`): the area and single spawns of maps 0..10 without Devil Square (event, M7), single
+  spawns within 3 tiles of their spot (mup's choice). 2301 monsters, 87 of them on spots that are walls in this
+  client's terrain (mostly Atlans) are left out, 2214 on the maps. AI: notice within view range, chase with an A* path
+  (`path.py`) up to twice the view range and the spawn's range from home, attack (`18` animation `0x64`, `15` and
+  `26` to the player) at attack speed, return home, wander within move range. Monsters don't enter the safe zone,
+  don't stand on each other and don't attack players in it. Damage is the raw `Monster.txt` range, no defense or
+  miss yet (M4).
+- Death: `17` to the player and its viewers, `F3 04` after 3 s in the town of the map (Devias for Devias, Lost
+  Tower, Icarus; Noria for Noria; Lorencia otherwise, usual rules), full life and mana. From level 10 a death costs
+  2% of the level's exp (usual value; with mup's exp per level until M4's exp table). A character saved dead comes
+  back in town.
+- Regen every 3 s: 1% of max life, 3% of max mana (mup's own rates), `26` / `27` with `FF`.
+- Test: own monster files (a spider that doesn't look, a dragon hitting for 1, a hound killing with one hit), a
+  walk into a wall, chase and hit, regen, death and respawn, the gate to Noria at level 1 (refused) and level 10.
+- Real client: looked fine.
+
 ## M3 items
 
 - Reverse engineer the item format first: 4 bytes per item in `F3 10` (`[slot][4 bytes]`), 8 x 8 inventory grid,
@@ -146,10 +182,84 @@ Done when: kill a monster, pick up its drop, equip it, another client sees the n
 - Devil Square `90`..`96`, `99`.
 - PK: levels, timers, item drop on death.
 
+## Bots
+
+AI players: ordinary accounts and characters that start at level 1, play through the same rules as clients and grow
+by a career plan. Each B milestone follows the M milestones it needs.
+
+Design:
+- In process, no socket: a `BotSession` is a connection the game can't tell from a client. `view.py` shows every
+  non monster connection as a player, so real clients see bots with no extra packets.
+- Input: the bot builds client packets (`CMove`, `CAttack`, `CJoinGame`, ...) and dispatches them through
+  `server.handlers` like `protocol.py` does. Bots can do nothing a client can't, every server check applies to them.
+- Output: `write()` hands the built server packets to the brain. `Packet` keeps its values as attributes, so they are
+  typed events (`SDamage`, `SKill`, `SLevelUp`, later trade and party requests) without parsing.
+- Perception: `c.view`, what a client standing there has been shown.
+- Brain in three layers:
+  - career: hunting grounds derived from data, not hand written. `Monster.txt` levels and `MonsterSetBase.txt`
+    spawns grouped by map and area; pick the one near the bot's level. Map progression from the `Gate.bmd` graph
+    (entrance -> target, minimum level, MG 2/3). Stat build per class as point ratios. Personality: risk, greed,
+    chattiness, play schedule (log in and out in sessions, progress only while online).
+  - activity: small state machines (travel, hunt, loot, rest, restock / sell, trade, idle in town) with timeouts,
+    picked by priority every few seconds: survive > restock > sell / repair > upgrade > level.
+  - motor: `path.find_path` for short paths, cached gate to gate waypoints for long ones, attack speed cadence,
+    skill choice by mana and range.
+- Driven by the M2 game tick, each bot thinks every 0.5..1 s, staggered. No timers of its own.
+- Storage: a migration with `bots (character_id, personality, career state as JSON, rng seed, schedule)`. Bot
+  characters are ordinary `characters` rows saved by `GameServer.save`. `bin/account.py` creates bots.
+- Bots get items and zen only from the drops, shops and kills players get, nothing out of thin air.
+- Players can tell a bot when they ask or trade with it.
+
+## B0 bots: session, hunting, levelling
+
+- `Session` base for `BaseProtocol` and `BotSession` (cid, acc, player, view, playing, write). Move logic the
+  handlers reach through the connection (`send_all`, which skips non `BaseProtocol` connections) into `mup/server`.
+- Bot accounts and characters: the `bots` table, creation in `bin/account.py`, login without a password (set
+  `acc`, dispatch `CJoinGame`), cids from the player range.
+- Walk pacing: `move_handler` sets the position to the walk target at once, a bot sends short segments and waits
+  for each like M2 monsters do (`next_step_at`). Measure the real client's walk speed per tile from logged traffic.
+- Hunting grounds from `Monster.txt` / `MonsterSetBase.txt`, hunt / rest / return to town, death and respawn.
+- Stat points through `F3 06` (handler still to write, see M4) by the class build.
+- A simulation script: game and bots without sockets on a fast clock (`GameServer.now`), reports levels over
+  simulated hours. Used to balance exp rates and bot behaviour.
+
+Done when: the test's client sees a bot appear, walk, attack and kill; the simulation takes bots of all four
+classes a few levels up without getting stuck; the real client watches a bot hunt outside Lorencia.
+
+## B1 bots: items, shops, map progression
+
+- Loot (`22`), potions (`26`), equip upgrades by class and stat requirements, gear requirements feed the stat build.
+- Town trips: sell, buy potions, repair (M5 shops).
+- Skills (M4), map progression through gates as levels unlock the next hunting ground.
+
+Done when: a bot left alone goes from Lorencia to the next map's hunting ground with better gear than it started
+with.
+
+## B2 bots: party, whisper, trade
+
+- Party: accept invites from players near the bot's level, follow the leader, share exp.
+- Whisper and chat: canned lines per situation, a tiny command grammar (`price X`, `buy X`, `sell X`), wts / wtb
+  ads in town chat. A language model for chat lines only, optional: async, with a timeout, never in the tick, no
+  decisions.
+- Item value: base price from `Item/ItemValue.txt` / `Shop/*.txt`, use to the bot (upgrade for its class and
+  stats, jewels it needs), market memory: a `trades` log table, median price per item, level and options.
+- Bot to bot: a server side order book matches wants and offers, bots meet in town and trade through the real
+  `36`..`3D` flow so players see it.
+- Bot to player: trade requests arrive as events, the bot checks every change of the window against its reserve
+  price, accepts only after the other side has been unchanged for ~2 s, never takes unknown items, daily spend cap
+  per bot.
+
+Done when: a player buys an item from a bot and sells one to it in the real client; two bots trade with each other
+in Lorencia.
+
+## B3 bots: guilds, quests, events
+
+- Join and create guilds, second class quest when the career reaches it, Devil Square entry.
+
 ## Reverse engineering backlog
 
 - Item byte layout (M3).
-- Unknown server packets: `01`, `0B`, `0C`, `11`, `1A`, `71`, `F1 04` / `05` / `12`, `F3 07` / `08` / `13` / `14` /
+- Unknown server packets: `01`, `0B`, `0C`, `1A`, `71`, `F1 04` / `05` / `12`, `F3 07` / `08` / `13` / `14` /
   `20` / `22` / `23` / `30` / `40`.
 - Client packets missed by the sender index (whisper and others), and `97`, `98`, `A2`, `C1`.
 - Client chat layout `00`.

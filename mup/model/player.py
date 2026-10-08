@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List
+from typing import List, Optional, Tuple
 from mup.model.item import Item
 
 BASE_EXP = 100
@@ -83,6 +83,10 @@ class Player:
     direction: int = 0
     inventory: List[Item] = field(default_factory=list)
     skills: List[int] = field(default_factory=list)
+    # in game only, times are the game clock (GameServer.now)
+    respawn_at: Optional[float] = None  # when a dead character comes back
+    next_regen_at: float = 0.0
+    walk_path: List[Tuple[int, int]] = field(default_factory=list)  # tiles of the last walk, start to end
 
     @classmethod
     def new(cls, class_type: CharacterClass, **values):
@@ -93,6 +97,10 @@ class Player:
         p.life = p.max_life
         p.mana = p.max_mana
         return p
+
+    @property
+    def dead(self):
+        return self.life <= 0
 
     @property
     def class_info(self):

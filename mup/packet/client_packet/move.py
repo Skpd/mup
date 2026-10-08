@@ -20,10 +20,12 @@ class Move(Packet):
         steps = self.path[0] & 0x0F if self.path else 0
         steps = min(steps, (len(self.path) - 1) * 2)
 
+        self.steps = []  # x, y offsets, one per step
         x, y = self.x, self.y
         for n in range(steps):
             b = self.path[1 + n // 2]
             dx, dy = STEPS[(b >> 4 if n % 2 == 0 else b) & 0x07]
+            self.steps.append((dx, dy))
             x += dx
             y += dy
 

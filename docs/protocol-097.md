@@ -14,6 +14,8 @@ Every layout below is marked with where it was confirmed:
 - **code**: read in the decompiled handler / sender
 - **traffic**: seen byte for byte in a real client session (`1791384296.log`)
 - **index**: only located by the scripts, layout not reviewed
+- **files**: checked in the data files of this client and of the later clients in `~/projects/client/Cliente` and
+  `~/projects/client/client_wip` (maps up to World79)
 
 Offsets are from the start of the packet, including the header. Multi-byte values are little endian unless
 marked BE. Object ids (`cid`) are always 2 bytes BE, the high bit is a flag the client masks off (`& 0x7FFF`).
@@ -41,6 +43,20 @@ to this exe.
 | C3/C4 decrypt | `0x4e7290` |
 | `send` thunk / import | `0x4e7188` / IAT `0x4f7338` (ws2_32 ordinal 19) |
 | default server address pointer, port | `0x503bf8` -> slot `0x4fc35e` (`mu.skpd.dev`, patched, 3 of the 4 address slots), `0x503bfc` = 44405 |
+| quest object | pointer at `0x5253a4`: `+0x04` class, `+0x05` second class, `+0x08` `Quest.bmd` records, `+0x1c848` quest states (50 bytes), `+0x1c87a` current quest, `+0x1c87b` quest window open, `+0x1c87c` current dialog, `+0x1c87e` state of the current quest |
+| quest window | text selection `0x401710`, answer click `0x401d00`, window click `0x402660`, close `0x401920`, show dialog `0x4017a0` |
+| `Dialog.bmd` in memory | `0x7c11330`, `0x400` per entry, index of the dialog shown `0x503c1c` |
+| data file loading | `0x4c09b0`: `Quest.bmd` `0x401040`, `Dialog.bmd` `0x459aa0` |
+| objects (characters, monsters, NPCs) | 400 of `0x364` bytes at `DAT_07a5f9b8`: `+0x00` in use, `+0x1ac` cid, `+0x2cd` dead, `+0x2d6` / `+0x2d7` walk target, `+0x358` / `+0x35c` tile x / y. Find by cid `0x43dc30` (400 when missing), remove all but one cid `0x43dac0` |
+| world load | `0x4bef50`: object models `0x4bd0b0`, then `Data\World{map+1}\`: `Terrain.map` (`0x4aa9c0`), `Terrain{map+1}.att` (`0x4aa820`), `terrain.obj` (`0x4b27d0`), textures, see [Maps](#maps). Current map number at `0x4fd640`, read in 51 functions |
+| hero character | pointer at `0x7c0dd1c`: `+0x0e` level, `+0x10` exp, `+0x14` str `+0x16` agi `+0x18` vit `+0x1a` ene, `+0x1c` life `+0x1e` mana `+0x20` max life `+0x22` max mana, `+0x40` next exp, `+0x60` level up points (2 bytes each, exp and next exp 4). Kept encrypted between uses, see [Extending the client](#extending-the-client) |
+| next level exp | `0x45c980`, called by the `F3 05` handler, see [Client limits](#client-limits) |
+| `Text.bmd` in memory | `0x7c45a4c`, 300 bytes per entry (from the character window's format pointers) |
+| frame | `SwapBuffers` in `0x4d1460` (game scenes), `0x4c3b20` (map loading, calls the world load), `0x4d0820` (loading screen) |
+| interface | all windows drawn by `0x4a9370` (called from `0x47fa9e` in `0x47f970`), window hotkeys `0x4779b0`. Character window `0x4a20e0` (open flag `0x7dab76e`, position `0x7daae84` / `0x7daae88`, clicks and the `F3 06` sender `0x49c950`), party `0x4a44e0` |
+| terrain attributes | `0x828d278`, 256 x 256 bytes, index `0x4aa780`: `(y & 0xFF) << 8 \| (x & 0xFF)` |
+| path finder | `0x425720`, state at `0x57c7208` (`+0x08` points to the attributes) |
+| gate check, sends `1C` | `0x474030`, every frame. `Gate.bmd` in memory at `0x7c11328` |
 
 ## Transport
 
@@ -61,7 +77,7 @@ a serial counter and the rest is SimpleModulus encrypted (code).
 **Packets the client only accepts encrypted.** The dispatcher passes an "arrived encrypted" flag to these
 handlers. On a C1 or a serial mismatch they drop the packet and the client sends `C1 F1 03 00` (code):
 
-`16` exp, `19` skill animation, `1C` teleport, `1E` area skill animation, `24` item move result, `29`,
+`16` exp, `19` skill animation, `1C` map move, `1E` area skill animation, `24` item move result, `29`,
 `30` npc talk, `F1 02` logout result (types 1 and 2), `F3 03` character info, `F3 10` inventory.
 
 **Login fields** (account, password) are additionally xored with `FC CF AB` (repeating) before the chain
@@ -89,22 +105,32 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C1 F3 01` character created | `[4]` result: 1 ok, 0 opens dialog `0x36`, 2 dialog `0x37` (texts not looked up, mup uses the usual meanings: 0 bad or taken name, 2 no free slot). `[5..14]` name, `[15]` slot: index into the 5 character slots (`0x364` bytes each at `DAT_07a5f9b8`). Class and look come from the create screen, nothing after `[15]` is read | code `0x412600` |
 | `C1 F3 02` character deleted | `[4]` 1 opens dialog `0x39` (deleted), anything else dialog `0x3a` showing the value as an error code. mup: 0 no such character of the account, 2 wrong personal code | code (dispatcher) |
 | `C3 F3 03` character info | **42 bytes**, must be encrypted: `[4]` x `[5]` y `[6]` map `[7]` direction, `[8..11]` exp, `[12..15]` next exp, then 2 bytes each: `[16]` level up points `[18]` str `[20]` agi `[22]` vit `[24]` ene `[26]` life `[28]` max life `[30]` mana `[32]` max mana, `[34..35]` unused, `[36..39]` money, `[40]` pk level, `[41]` ctl code | code `0x413380` |
-| `C1 F3 05` level up | `[4]` level `[6]` level up points `[8]` max life `[10]` max mana, 2 bytes each | code `0x41b6d0` (asm) |
+| `C1 F3 04` respawn | 20 bytes: `[4]` x `[5]` y `[6]` map `[7]` direction, `[8..9]` life `[10..11]` mana (little endian), `[12..15]` exp `[16..19]` money. Clears all 400 objects, creates the hero again at x, y and loads the map when it isn't the current one. The client sends nothing back | code `0x413b00` (asm: the decompile loses the packet pointer) |
+| `C1 F3 05` level up | `[4]` level `[6]` level up points `[8]` max life `[10]` max mana, 2 bytes each. Life and mana are set to the new max, the next level's exp is computed by the client (`0x45c980`, see [Client limits](#client-limits)) | code `0x41b6d0` (asm) |
+| `C1 F3 06` level up point result | `[4]` high nibble 0: nothing changes. Otherwise the low nibble is the stat (0 str, 1 agi, 2 vit, 3 ene): the client takes one level up point and adds 1 to the stat itself, vit also sets max life and ene max mana to `[6..7]`. No maximum is checked | code `0x41b9a0` (asm) |
 | `C4 F3 10` inventory | must be encrypted | code `0x414310` (index) |
 | `C1 F3 11` skill list | `[4]` count (max 20), then 3 bytes each: `[+0]` slot, `[+1]` skill number, `[+2]` unused. `[4]` = `0xFE`: set one skill, `[5]` slot `[6]` number. `[4]` = `0xFF`: remove skill at slot `[5]` | code `0x414010` |
 | `C1 00` chat | `[3..12]` name, `[13..72]` message. Message prefix `~` party, `@` guild, `#` shout, anything else normal chat | code `0x414960` |
 | `C1 0D` notice | `[3]` type, `[4..]` text | code `0x414d10` (reads only) |
 | `C1 0F` weather | `[3]` high nibble: 0 turns the effect off, 1 turns it on with intensity low nibble * 6, other values are ignored | code (dispatcher) |
-| `C1 10` walk | `[3..4]` cid, `[5]` x `[6]` y, `[7]` direction in the high nibble | code `0x414ea0` |
+| `C1 10` walk | `[3..4]` cid, `[5]` x `[6]` y, `[7]` direction in the high nibble. Any object but the hero (players and monsters alike): x, y becomes its walk target and the client finds the path there from the tile it has the object on (`0x425720`), puts it on the target when there is none. The hero: x, y becomes its tile when it isn't walking. Dead objects (`17`) are ignored | code `0x414ea0` |
+| `C1 11` place | `[3..4]` cid, `[5]` x `[6]` y: puts the object on x, y without walking. Not used by mup | code `0x415250` |
 | `C2 12` players in view | `[4]` count, then **32 bytes** each: `[+0..1]` cid, `[+2]` x `[+3]` y, `[+4]` class `<< 5 \| 2nd class << 4 \| pose` (pose 2..4 pick a sitting / leaning animation), `[+5..14]` equipment, `[+16]` effects bits 0..3 (poison, ice, damage buff, defense buff) and `[+17]` bit 0 another effect, `[+18..27]` name, `[+28]` target x `[+29]` target y, `[+30]` direction << 4 \| pk level, `[+31]` unused. Names containing `webzen` are skipped | code `0x4164b0` |
-| `C2 13` monsters in view | `[4]` count, then 12 bytes each: `[+0..1]` cid, `[+2]` type, `[+3]` unused, `[+4..5]` effects (little endian word: bits 0..3 as in players in view, bit 8 the `[+17]` effect), `[+6]` x `[+7]` y, `[+8]` target x `[+9]` target y, `[+10]` direction in the high nibble | code `0x416fe0` |
+| `C2 13` monsters in view | `[4]` count, then 12 bytes each: `[+0..1]` cid, `[+2]` type, `[+3]` unused, `[+4..5]` effects (little endian word: bits 0..3 as in players in view, bit 8 the `[+17]` effect), `[+6]` x `[+7]` y, `[+8]` target x `[+9]` target y, `[+10]` direction in the high nibble. The client creates the monster at x, y and walks it to the target. Bit 15 of the cid set: no walk, `0x416ed0` instead (not reviewed, usual meaning: just respawned). Creating fails when the 400 objects are taken, the rest of the list is skipped then | code `0x416fe0` |
 | `C1 14` out of view | `[3]` count, then cids from `[4]` | code (dispatcher, asm) |
-| `C1 15` damage | `[3..4]` target cid, `[5..6]` BE: damage in the low 13 bits (max 8191), flags in bits 13..15 of the BE word, i.e. `[5]` bits 5..7: bit 7 blue (critical), bit 6 green (excellent), bit 5 magenta, green wins over blue over magenta, none: orange, red when the target is you. Damage 0 shows a miss. When the target is you the client also subtracts the damage from a 2 byte field of its character (`+0x1C`, likely life) | code `0x4179a0` |
-| `C3 16` kill exp | must be encrypted: `[3..4]` killed cid, `[5..6]` exp BE, `[7..8]` damage BE, shown like a damage number | code `0x4199a0` |
-| `C1 17` killed | `[3..4]` cid of the dying object, nothing else is read | code (dispatcher, asm) |
-| `C1 18` animation | `[3..4]` cid, `[5]` direction, `[6]` animation | code `0x417fc0` |
+| `C1 15` damage | `[3..4]` target cid, `[5..6]` BE: damage in the low 13 bits (max 8191), flags in bits 13..15 of the BE word, i.e. `[5]` bits 5..7: bit 7 blue (critical), bit 6 green (excellent), bit 5 magenta, green wins over blue over magenta, none: orange, red when the target is you. Damage 0 shows a miss. When the target is you the client also subtracts the damage from its life (hero `+0x1C`, 2 bytes, stops at 0). The mask is `AND EBX, 0x1FFF` at `0x417a0c`, the value's high byte and the flags are both read from `[5]` through `AL` (`0x4179ea`) | code `0x4179a0` |
+| `C3 16` kill exp | must be encrypted: `[3..4]` killed cid, `[5..6]` exp BE, `[7..8]` damage BE, shown like a damage number. The damage is a full 16 bits, unlike `15`. The exp is added to the hero's 4 byte exp | code `0x4199a0` |
+| `C1 17` killed | `[3..4]` cid of the dying object, nothing else is read. Sets the object's dead flag (`+0x2cd`) and stops its walk, the hero too | code (dispatcher, asm) |
+| `C1 18` animation | `[3..4]` cid, `[5]` direction, `[6]` animation, nothing after it is read. Puts the object on its walk target first. Animations: `64` / `65` attack (players: by weapon, monsters: animation 4, every third time 3, their two attacks), `66` / `67` stand, `12` and `6C`..`80` emotes (mapped per class), anything else sets that animation number directly | code `0x417fc0`, `0x42a950` |
 | `C3 19` skill animation | must be encrypted: `[3]` skill number, `[4..5]` caster cid, `[6..7]` target cid (bit 15: effect applied) | code `0x4186b0` |
+| `C3 1C` map move | must be encrypted: `[3]` 0: teleport on the map with the teleport animation, objects stay. Anything else: map change, the client removes all objects but the hero, loads `[4]` when it isn't the current map and answers `F3 12`. `[4]` map, `[5]` x `[6]` y, `[7]` direction. Also ends the wait after its own `1C` request | code `0x415520` |
 | `C3 1E` area skill animation | must be encrypted: `[3]` skill number, `[4..5]` caster cid, `[6]` x `[7]` y | code `0x418fd0` |
+| `C1 26` life | `[3]` `FF`: life, `FE`: max life, value `[4..5]` **big endian**. `FD`: resets a timer (`0x57c7140`, presumably the potion delay). Other values: an item count at inventory slot `[3] - 12` goes down by one (potion use, M3) | code `0x41bcd0` (asm) |
+| `C1 27` mana | `[3]` `FF`: mana, `FE`: max mana, value `[4..5]` big endian. Other values: mana from `[4..5]` and the item count as in `26` | code `0x41bfc0` (asm) |
+| `C1 A0` quest states | `[3]` byte count, then the state bytes (see [Quest window](#quest-window)). The client zeroes its 50 state bytes and copies `[3]` bytes, the count isn't checked against 50. Also sets the quest class from the hero's class (low 3 bits class, bit 3 second class): the only place it is set | code `0x420320`, `0x401160` |
+| `C1 A1` quest dialog | `[3]` quest index, `[4]` state byte, stored as state byte `quest >> 2`. Closes the other windows and opens the quest window with the text for the quest's state. Doesn't check which NPC is being talked to | code `0x420350`, `0x4018d0` |
+| `C1 A2` quest state result | `[3]` quest index, `[4]` result: 0 does what `A1` does with `[5]` as the state byte, anything else is ignored | code `0x420380` |
+| `C1 A3` quest reward | `[3..4]` cid, `[5]` type. `C8`: effect and sound, when the object is the hero `[6]` is added to its level up points (the field `F3 05` `[6]` sets). `C9` class change: `[6]` class as in players in view `[+4]` (class << 5 \| 2nd class << 4), stored on the object as `((v & 0x10) \| v >> 4) >> 1`, also in the hero's character info when it is the hero, effect and sound. Other types do nothing | code `0x4203c0` |
 
 Everything else the client handles is listed in appendix A with the offsets its handler reads.
 
@@ -118,18 +144,229 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C1 F3 01` create character | `[4..13]` name, `[14]` class: **class number << 2** (0 dw, 16 dk, 32 elf, 48 mg), everything the server sends uses class number << 3 | traffic |
 | `C3 F1 02` logout request | 5 bytes, sent encrypted: `[4]` type as in the result: 0 close the game, 1 character select, 2 server select. Preceded by `F3 30` (types 0 and 1 before, type 2 right after). The sender isn't in the sender index, a byte scan for `F1` head stores doesn't find it either | traffic (`1791402942.log`, `1791403016.log`) |
 | `C1 F3 30` key settings | 18 bytes, sent on every logout: `[4..13]` 10 bytes (skill hotkeys, all 0 when none set), `[14..17]` `09 00 04 08` seen. Layout not reviewed, presumably what the server sends back with `F3 30` on join | traffic |
-| `C3 31` | no fields, sent right after `F3 00` when going back to character select. Usual meaning: close the NPC / shop window | traffic |
+| `C3 31` | no fields, sent right after `F3 00` when going back to character select. Usual meaning: close the NPC / shop window. Sent by the quest window's close (`0x401920`: answer return code 2, close button), which the character select reset (`0x412700`) also calls | traffic, code `0x401920` |
+| `C3 30` talk | `[3..4]` NPC cid. Sent when clicking an NPC of type 234 (`EA`) or higher, clicks on lower types send nothing | code `0x4650a0` |
+| `C3 A0` quest states request | no fields, sent right before `30` while the client has no quest class yet (until the first `A0` arrives) | code `0x4650a0` |
+| `C3 A2` quest proceed | `[3]` quest index, `[4]` 1. Sent by a dialog answer with return code 1 (after the client's requirement check) or 3 (no check), and by a click in an area of the quest window (`0x402660`, when it is drawn not reviewed) | code `0x401d00`, `0x402660` |
 | `C1 F3 02` delete character | `[4..13]` name of the selected character, `[14..23]` the personal code as typed in the dialog (10 byte buffer, zero padded) | code `0x4c3f40` |
 | `C1 F3 03` enter game | `[4..13]` name | traffic |
-| `C1 F3 06` add level up point | 5 bytes, `[4]` stat (`03` seen) | index `0x49c950`, traffic |
+| `C1 F3 06` add level up point | 5 bytes, `[4]` stat: 0 str, 1 agi, 2 vit, 3 ene (the four buttons of the character window, top to bottom). Sent while the hero has level up points, the stat's value isn't checked | code `0x49c950`, traffic |
+| `C1 F3 12` map loaded | 4 bytes, no fields, sent by the `1C` handler after a map change | code `0x415520` |
 | `C3 0E 00` ping | 12 bytes: `[4..7]` tick count, `[8..9]` attack speed, `[10..11]` magic speed | code `0x40e2a0`, traffic |
 | `C1 10` walk | `[3]` x `[4]` y (start of the walk), `[5]` direction << 4 \| step count, `[6..]` step directions, one per nibble, high nibble first. Sent with 0 steps to only turn | traffic |
 | `C1 15` attack | `[3..4]` target cid, `[5]` attack animation (0x64 seen), `[6]` direction | traffic, code `0x4650a0` |
 | `C1 18` animation | `[3]` direction, `[4]` animation (0x66 seen when turning) | traffic |
 | `C3 19` skill on target | `[3]` skill list index, `[4..5]` target cid | code `0x462140` |
 | `C3 1E` area skill | `[3]` skill list index, `[4]` x `[5]` y, `[6]` direction | code `0x46f270` |
+| `C3 1C` move through a gate | 6 bytes: `[3]` gate number, `[4]` `[5]` 0. Sent while the hero stands in the area of an entrance gate (`Gate.bmd` kind 1) of its map and its level is at least the gate's (magic gladiators: two thirds of it, class number 3), else the client shows the level message. At most every 3 s and only one until a `1C` answer arrives. Gates 45..49, 55, 56 also need the hero not riding a Horn of Uniria / Dinorant (items `0x1A2` / `0x1A3`), 62..65 a check not reviewed | code `0x474030` |
 | `C3 1D` area skill hits | `[3]` skill list index, `[4]` x `[5]` y, `[6]` serial, `[7]` count, then target cids. **Has a byte between y and count** that OpenMU's 0.75 layout doesn't | code `0x442610` |
 | `C1 00` chat | name + message, not reviewed yet: send a chat line and check the log | - |
+
+## Terrain
+
+`Data\World{map+1}\Terrain{map+1}.att`, read at `0x4aa820` (code): 0x10003 bytes, `00 FF FF`, then 256 x 256
+attribute bytes, index `y * 256 + x`. The client refuses the file (and the map) when the size or header differ, a
+byte is above `0x7F`, or on maps 0..4 one tile doesn't hold the value it checks. The `Terrain.att` next to it in
+most World folders isn't read.
+
+| bit | meaning |
+|---|---|
+| `01` | safe zone |
+| `02` | a character stands there, set and cleared by the client at run time (`0x439670`). A few files have one left |
+| `04` | wall |
+| `08` | no ground |
+
+The path finder steps only on tiles below 2, so walls, void and other characters block it. A straight line check
+(`0x460a30`) passes tiles below 4. Positions: tile x is `(x + 0.5) * 100` in the world, a direction byte d is an
+angle of `(d - 1) * 45` degrees (`1C`, `F3 04`, `13`, `18`).
+
+The server's own terrain files (`~/projects/client/Data/Terrain`, a later version) are the same for maps 0, 1, 3, 5,
+8, 9, 10 and differ for 2, 4, 6, 7. mup uses the client's, copied to `data/terrain` (`mup/server/terrain.py`).
+
+## Gates
+
+`Data\Gate.bmd`, loaded in `0x4c09b0`: 100 entries of 9 bytes, xor `FC CF AB` (9 is a multiple of 3, so a key
+restarting per entry is the same as one run over the file): kind (0 town / warp target, 1 entrance, 2 exit), map,
+x1, y1, x2, y2 (inclusive), target gate, direction, minimum level. The gate check (`0x474030`, code) reads kind,
+map, area and level; target and direction are server data, their places are from the decoded file matching
+`Move/Gate.txt` (index). Copied to `data/Gate.bmd` (`mup/server/gate.py`).
+
+This client has gates 1..27 (Lorencia, Dungeon, Devias, Noria), 50..52 (Arena) and 58..61 (Devil Square), none for
+Lost Tower, Atlans, Tarkan and Icarus. Compared with the server's `Move/Gate.txt` the entries match, except the
+Dungeon gates 5..16: level 40 / 50 here, 20 there. Town gates: 17 Lorencia, 22 Devias, 27 Noria.
+
+## Maps
+
+What the client loads for map n, the same code for every map number (`0x4bef50`, code):
+
+| `Data\World{n+1}\` | |
+|---|---|
+| `Terrain.map` | 196609 bytes: a version byte, then three 256 x 256 layers: tile index, second tile index, alpha of the second layer (byte / 255). Layer 2 holds 255 where there is no second tile (files) |
+| `Terrain{n+1}.att` | see [Terrain](#terrain) |
+| `Terrain.obj` | `[0]` version, `[1..2]` count, then 30 bytes per object: `+0` model slot (2 bytes), `+2` position, `+14` angle, `+26` scale (floats). A missing file shows "file not found" and closes the client |
+| `TerrainHeight.OZB`, `TerrainLight.OZJ` | height and light map, asked for as `.bmp` / `.jpg` |
+| tiles | `TileGrass01`, `TileGrass02`, `TileGround01..03`, `TileWater01`, `TileWood01`, `TileRock01..07` in bitmap slots `0x23..0x30`: 14 tile textures, presumably tile index 0..13 (the mapping isn't read). Also `TileGrass01..03` OZT, `leaf01` / `leaf02`, `rain01` / `rain02` from World1 and `rain03` from World10 |
+
+Object models (`0x4bd0b0`, code). Lorencia (map 0) loads named models from `Data\Object1\` (`Tree01.bmd`, ...)
+into fixed slots. Every other map loads `Data\Object{n+1}\Object01.bmd` .. `Object160.bmd` into model slots 0..159,
+textures from the same folder, missing files are skipped. The object type in `Terrain.obj` is the slot. On top come
+extras per map in slots above 159: animals (0, 1, 3, 4), the meteors and boss of map 5, Atlans water (7), Tarkan
+sand (8), Icarus clouds (10), and a few values set after loading for maps 1 and 8.
+
+`World6` (map 5) has only `Terrain6.att` in this client, no `Terrain.map` or `Terrain.obj`: the map is unused.
+
+**Later clients** (files). `Cliente` and `client_wip` keep the same data, encrypted with the map file xor
+(bytes, `k` starts at `0x5E`): `out[i] = (in[i] ^ key[i % 16]) - k; k = in[i] + 0x3D`, key
+`D1 73 52 F6 D2 9A CB 27 3E AF 59 31 37 B3 E7 A2`.
+
+| later file | decrypted | for this client |
+|---|---|---|
+| `EncTerrain{n}.map` | `[0]` version, `[1]` map number, the three layers | drop `[1]` |
+| `EncTerrain{n}.obj` | `[0]` version, `[1]` map number, `[2..3]` count, the same 30 byte entries | drop `[1]`. Cliente's `EncTerrain1.obj` counts one entry more than it holds |
+| `EncTerrain{n}.att` | then xor `FC CF AB`: `[0]` version, `[1]` map number, `[2..3]` `FF FF`, then 256 x 256 attributes of 1 byte (65540 bytes) or 2 bytes (131076 bytes), depending on the map and the client | the low byte with an `00 FF FF` header. Bits above `0x08` not reviewed, the client refuses bytes above `0x7F` |
+| `Object{n}\ObjectNN.bmd` version 12 | `BMD`, `0C`, 4 byte size, then encrypted data. Decrypted it has the layout of version 10 (name, mesh / bone / action counts, checked on World38 `Object01`) | `BMD`, `0A`, the decrypted data. Not tried in the client yet |
+| `TerrainHeight.OZB`, `TerrainLight.OZJ`, `.OZJ` / `.OZT` textures | the same as in this client (`TerrainHeight.OZB` 66620 bytes in both) | copy |
+
+Every map of `client_wip` uses tile indices 0..13 only. Object types stay below 160 except World52 (165) and
+World58 / World59 (247): the slots above 159 aren't loaded from the map folder and hold the extras above. Later
+clients draw some objects, water, sky, fog and effects with code of their own per map, this client's per map code
+only knows maps 0..10. Monster models are loaded per monster type in the client (`Data2\Monster\`, `0x4bc4d0`,
+not reviewed), so a ported map can only show monster types this client has. Map numbers above 10 are not tried.
+
+## Client limits
+
+From code, values the client holds or shows:
+
+| value | limit |
+|---|---|
+| level | 2 bytes (`F3 00`, `F3 05`, hero `+0x0e`), shown unsigned |
+| exp | 4 bytes (`F3 03`, `F3 04`, hero `+0x10`). `16` adds at most 65535 per packet |
+| next level exp | `F3 03` sets it, every `F3 05` replaces it with the client's own formula (`0x45c980`, 32 bit): `10 (L + 9) L²`, above level 255 plus `1000 (L - 246) (L - 255)²` |
+| stats | 2 bytes (`F3 03`, hero `+0x14..+0x1a`), shown unsigned (`0x4a20e0` zero extends them), the item tooltip compares them unsigned (`0x487030`). Neither the `F3 06` sender nor its result checks a maximum. Values the client derives from stats (damage, defense, speeds) not reviewed |
+| life, mana | 2 bytes everywhere (`F3 03`, `F3 05`, `26` / `27`, hero `+0x1c..+0x22`) |
+| damage | `15`: 13 bits (8191), `16`: 16 bits |
+
+The character window prints exp with `Text.bmd` entry 201, `Exp : %d / %d`, signed: from level 370 the next exp
+(2158751000) is above 2³¹ and shows negative. `%u` in that entry fixes the display without touching code. At level
+406 the formula passes 2³² and wraps, a higher level cap needs a different `0x45c980`.
+
+Damage above 8191 in `15` needs a change in `0x4179a0`: mask `0xFFFF` and the flags from another byte, which
+doesn't fit in place because the value and the flags share `AL`. 65535 stays the limit, the client subtracts the
+damage from its 2 byte life. mup shows at most 8191 and applies the whole damage (`SDamage.of`).
+
+## Extending the client
+
+**Room in the exe** (files). `.text` is 0xF5F15 bytes in 0xF6000 raw: 0xEB bytes free, no room for new code. The
+headers end at 0x290 and the first section starts at 0x1000, so there is room for more section headers. The exe
+imports `LoadLibraryA` and `GetProcAddress`, and a single function of `DSOUND.dll` (a candidate for a proxy dll,
+wine needs `WINEDLLOVERRIDES=dsound=n,b` to load it from the client folder). Not looked into in depth: the exe has
+window titles of cheat tools (`GameHack 2.0`, `Speed Hack - PCGameHacks.com`), no check of its own bytes was seen.
+
+**Hook points** (code):
+
+- Interface: `0x4a9370` draws all windows once a frame, after the last window (`0x4a90c0`) is the place for new
+  ones. Interface coordinates are 640 x 480.
+- Drawing: `0x4c2930(bitmap, x, y, w, h, u, v, uw, vh, ...)` draws a bitmap slot (floats), `0x4c2860(x, y, w, h)`
+  fills a rectangle in the current `glColor`, text with `0x45d9c0` / `0x45dbb0` (x, y, string, ...), colours from
+  `0x4fccdc` / `0x4fcce4` (presumably text and background).
+- Textures: `0x4d3df0(name, bitmap, ...)` loads a `.jpg` name from the `.OZJ` file, `0x4d4240` a `.tga` name from the
+  `.OZT` file, into a bitmap slot. Slots seen up to `0x532`, free ones not mapped.
+- Mouse: x `0x82a4d10`, y `0x82a4d0c` (interface coordinates), left click flag `0x82a4bb8`, cleared by the window
+  that handles the click. Each window checks its own rectangle.
+- Packets: head codes the client doesn't handle reach the default of the switch at `0x4213ee`. Sending: the builder
+  `0x403390` and `send` on the socket at `0x556a590`, `0x49c950` (`F3 06`) is a short example of the whole sequence.
+- The hero character (`0x7c0dd1c`, 0x590 bytes) is kept xored between uses: a handler looks it up in the table at
+  `0x556a118` with the key `0x7c0dd24`, unlocks it (`0x403b30`, `0x403ca0`, counted) and locks it again
+  (`0x403dc0`). Other tables are kept the same way (`0x45cb20`). Code that reads hero values has to do the same.
+
+**Without code**: the interface textures (`Data/Interface/*.OZJ` / `.OZT`, loaded at `0x4bf4e0` and `0x4c09b0`),
+the texts in `Text.bmd` (800 entries of 300 bytes), and the windows the server opens: the
+[quest window](#quest-window), notices `0D`, chat.
+
+## Quest window
+
+The second class quests (priest Sevina) run on a generic quest window driven by two client data files and the
+`A0`..`A3` packets. Everything in this section is from code, none of it seen in traffic yet.
+
+**Data files.** `Data/Local/Quest.bmd` and `Data/Local/Dialog.bmd`, fixed size records, each record xored with
+`FC CF AB` with the key **restarting at every record** (`read_text.py` xors the whole file in one run, which only
+works for `Text.bmd` because its 300 byte records are a multiple of 3).
+
+`Dialog.bmd`: 200 entries of 1024 bytes. Used in this client: 0..5 (NPC texts) and 50..73 (second class quests).
+
+| offset | |
+|---|---|
+| 0..299 | text, wrapped at a space into at most 7 lines of 38 bytes |
+| 300..303 | answer count (int) |
+| 304..343 | 10 links (int): dialog shown after the answer when > 0 |
+| 344..383 | 10 return codes (int) |
+| 384..1023 | 10 answers of 64 bytes, each shown numbered on one line of 38 bytes |
+
+Text lines and answers share one box, centered on 7 lines. Answer return codes (`0x401d00`):
+
+- `-1`: only follow the link.
+- `1`: check the current quest's requirements (level and zen). On failure show the requirement's dialog, nothing
+  is sent. Otherwise send `A2 [quest] 01`.
+- `2`: close the window, sends `31`.
+- `3`: send `A2 [quest] 01` without the check.
+
+Both action codes send the same packet, the server can't tell answers apart, only "proceed" (`A2`) from "close"
+(`31`). The link is shown right away; the `A2` result reopens the window with the text for the new state.
+
+`Quest.bmd`: 200 entries of 584 bytes, the entry index is the quest index of `A0`..`A2`. Used: 0 "Find the Scroll
+of Emperor" (14/23), 1 "Three Treasures of Mu" (14/24, 14/25, 14/26 per class).
+
+| offset | |
+|---|---|
+| 0..1 | condition count |
+| 2..3 | requirement count |
+| 4..5 | `EB 20` in both quests (235 = priest Sevina in the low byte), not read by the code reviewed |
+| 6..37 | name |
+| 38..325 | 16 conditions of 18 bytes |
+| 328..583 | 16 requirements of 16 bytes |
+
+Condition, 18 bytes:
+
+| offset | |
+|---|---|
+| +0 | not read (1) |
+| +1 | type: 1 = bring an item |
+| +2, +3 | item group, index (item type `group * 32 + index`) |
+| +4 | item count, any item level |
+| +5 | requirement group, matched against the requirement's `+1` |
+| +6..+9 | one byte per class (dw, dk, elf, mg): 1 applies to the first class, 2 to the second class, 0 not at all |
+| +10..+17 | 4 dialog indices (2 bytes each): not started, in progress, item found, done |
+
+Requirement, 16 bytes:
+
+| offset | |
+|---|---|
+| +0, +2..+3, +14..+15 | not read |
+| +1 | condition group it applies to, `FF` all |
+| +4..+5 | min level, 0 none |
+| +6..+7 | max level, 0 none |
+| +8..+11 | zen, only checked by an answer with return code 1 |
+| +12..+13 | dialog shown when the requirement fails |
+
+**Text selection** (`0x401710`, on every `A1` / `A2`). The client takes the first condition whose byte for the
+hero's class is 1. If there is none it moves to the previous quest index and tries again. Requirements are
+checked for conditions whose class byte is `second class + 1`. Then by the quest's state:
+
+- 3, not started: requirements without zen, then the "not started" dialog or the failing requirement's dialog.
+- 1, accepted: "in progress" while an item condition has fewer items in the inventory than its count, otherwise
+  "item found". A quest without item conditions always shows "item found".
+- 2, done: "done".
+- 0: nothing selected, the window shows the previous dialog again.
+
+**State bits.** 2 bits per quest, state byte `quest >> 2`. Client bug (`0x4016d0`): the bit position is
+`2 * (quest - (quest >> 2))` instead of `2 * (quest & 3)`, used as an 8 bit shift count. The CPU masks it to
+`2 * ((quest - (quest >> 2)) & 15)` and positions of 8 or more read as state 0. So only 53 quest indices can hold a
+state: 0..4, 21..25, 42..46, 63..68, 85..89, 106..110, 127..132, 149..153, 170..174, 191..196. Quests 0..3 are where
+expected, quest 4 is in bits 6..7 of byte 1. The server has to put each quest's bits where the client reads them.
+
+**NPCs.** Only NPC types 234..255 can be talked to (`30`). The server opens the quest window with `A1` (instead of a
+shop window) and can send `A1` at any time, but only after an `A0`: without the quest class the text selection
+reads past the condition. NPC names come from `Data/Local/NpcName(Eng).txt`, one per type (234 and 252 have none).
 
 ## Differences with mup
 

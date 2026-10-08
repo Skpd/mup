@@ -15,7 +15,9 @@ from mup.server.handler.game_start import game_start_handler
 from mup.server.handler.login import login_handler
 from mup.server.handler.logout import logout_handler
 from mup.server.handler.magic import magic_attack_handler, aoe_magic_handler
+from mup.server.handler.map_ready import map_ready_handler
 from mup.server.handler.move import move_handler
+from mup.server.handler.move_gate import move_gate_handler
 from mup.server.handler.ping import ping_handler
 from mup.server.protocol import BaseProtocol
 
@@ -29,12 +31,14 @@ def create_gs(loop, cfg):
     gs.add_handler(0x19, None, magic_attack_handler)
     gs.add_handler(0x1E, None, aoe_magic_handler)
     gs.add_handler(0x10, None, move_handler)
+    gs.add_handler(0x1C, None, move_gate_handler)
     gs.add_handler(0x00, None, chat_handler)
     gs.add_handler(0x0E, 0x00, ping_handler)
     gs.add_handler(0xF3, 0x00, char_list_handler)
     gs.add_handler(0xF3, 0x01, create_character_handler)
     gs.add_handler(0xF3, 0x02, delete_character_handler)
     gs.add_handler(0xF3, 0x03, game_start_handler)
+    gs.add_handler(0xF3, 0x12, map_ready_handler)
     # cs.add_handler(0xF3, 0x06, add_point_handler)
     gs.add_handler(0xF1, 0x01, login_handler)
     gs.add_handler(0xF1, 0x02, logout_handler)
@@ -51,6 +55,7 @@ def create_connection(cs):
 
 async def main(loop, cfg):
     gs = create_gs(loop, cfg)
+    gs.start()
     server = await loop.create_server(create_connection(gs), host='0.0.0.0', port=cfg.gs_port)
     logger.info('Game server on port %s, exp rate %s, database %s', cfg.gs_port, cfg.exp_rate, cfg.db_path)
     return gs, server

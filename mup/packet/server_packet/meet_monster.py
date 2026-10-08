@@ -10,7 +10,7 @@ class MeetMonster(Packet):
         (4, 'effects', u16),  # bits 0..3 like players in view, bit 8 another effect
         (6, 'x', u8),
         (7, 'y', u8),
-        (8, 'target_x', u8),
+        (8, 'target_x', u8),  # the client walks the monster there
         (9, 'target_y', u8),
         (10, 'direction', u8, 0),  # direction << 4
     ))
@@ -18,5 +18,6 @@ class MeetMonster(Packet):
     @classmethod
     def of(cls, monsters):
         return cls(entries=[{
-            'cid': m.cid, 'type': m.type_id, 'effects': m.state, 'x': m.x, 'y': m.y, 'target_x': m.x, 'target_y': m.y,
+            'cid': m.cid, 'type': m.type_id, 'effects': m.state, 'x': m.x, 'y': m.y,
+            'target_x': m.walk_target[0], 'target_y': m.walk_target[1], 'direction': m.direction << 4,
         } for m in monsters])

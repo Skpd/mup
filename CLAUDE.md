@@ -5,19 +5,23 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 
 ## Layout
 
-- `bin/cs.py` connect server (port 44405), `bin/gs.py` game server (55901). Run from the repo root, the crypto
-  keys in `data/`, `config.ini` and the database are opened with relative paths. `bin/account.py`: accounts
+- `bin/cs.py` connect server (port 44405), `bin/gs.py` game server (55901). Run from the repo root, `data/`
+  (crypto keys, the client's terrains and `Gate.bmd`, the server's `Monster.txt` / `MonsterSetBase.txt`),
+  `config.ini` and the database are opened with relative paths. `bin/account.py`: accounts
   (create, password, personal code, ban).
 - `config.ini` (or the file in `MU_CONFIG`), read by `mup/config.py`: ports, advertised GS host, exp / drop rates,
-  database file and autosave, account auto creation, log level, packet logging.
+  database file and autosave, monster data files, account auto creation, log level, packet logging.
 - `mup/packet/`: `base.py` has `Base(bytearray)` (type, size, head, sub) and the declarative `Packet`: `code`, `size`,
   `fields` as `(offset, name, type[, default])`, `entry` for lists. Field types carry the byte order (`u16` LE,
   `u16be`, `cid` BE). `Packet(name=value)` builds, `Packet(data)` parses into attributes; list packets have an
   `of(...)` builder from models. `client_packet/*` mapped by their `code` in `client.py`, `server_packet/*` aliased
   in `server.py` (`S...` names).
 - `mup/server/`: `protocol.py` (framing, crypto, dispatch to handlers), `game.py` (`GameServer`: connections by cid,
-  distance based visibility, monster respawn), `connect.py`, `combat.py`, `handler/*` (one per packet, registered
-  in `bin/gs.py` / `bin/cs.py`), `character.py` (creation rules, start positions).
+  maps, the 100 ms game tick, entering, walking, relocating), `world.py` (maps, grids of who is where),
+  `terrain.py`, `view.py` (what each client has in view, `12` / `13` / `14`), `gate.py`, `monster.py` (monster data,
+  spawns), `ai.py` (monster behaviour), `path.py`, `combat.py` (hits, death, respawn, regen), `connect.py`,
+  `handler/*` (one per packet, registered in `bin/gs.py` / `bin/cs.py`), `character.py` (creation rules, start
+  and respawn gates). Game time is `GameServer.now`, the tick passes it on.
 - `mup/model/` dataclasses. `mup/repository/`: SQLite storage (`database.py` schema migrations, account and
   character repositories). Characters in game live in memory and are saved by `GameServer.save`.
 - `mup/common/crypt.py`: C3/C4 SimpleModulus, C1/C2 xor chain (`extract` / `pack`), login field xor.
@@ -38,9 +42,10 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 ## Testing
 
 - `./venv/bin/python tests/client.py`: starts its own CS and GS with a test config (ports 44415 / 55911, packet
-  logging on), plays two clients through login, character creation, walking, chat, combat, magic, disconnect and
-  relog. Run it after every change and extend it with every feature. It checks raw offsets from the doc, never the
-  packet definitions, so a wrong definition fails it.
+  logging on, its own monster files), plays two clients through login, character creation, walking, chat, combat,
+  magic, disconnect, relog, monsters chasing and killing, respawn and a gate. Run it after every change and extend
+  it with every feature. It checks raw offsets from the doc, never the packet definitions, so a wrong definition
+  fails it.
 - The real client is the final check: ask the user to try it and paste the log.
 
 ## Protocol rules

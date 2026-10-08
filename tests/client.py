@@ -4,8 +4,8 @@ client does (same keys, encryption, xor and packet layouts, see docs/protocol-09
 
 usage: ./venv/bin/python tests/client.py
 Exits non zero on the first failed check and prints the end of the server logs.
-The servers run with their own config on ports 44415 and 55911 and a database in a temporary directory, so the test
-can run next to the usual servers.
+The servers run with their own config on ports 44415 and 55911, a database in a temporary directory and their own
+monsters (MONSTERS, SPAWNS), so the test can run next to the usual servers.
 """
 import os
 import socket
@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,28 +31,57 @@ GS_PORT = 55911
 PERSONAL_CODE = '4321'
 CONFIG = """
 [network]
-cs_port = {}
-gs_port = {}
-gs_host = {}
+cs_port = {cs_port}
+gs_port = {gs_port}
+gs_host = {host}
 [database]
-db_path = {{}}
+db_path = {db}
 autosave_interval = 2
+[world]
+monster_info = {monsters}
+monster_spawns = {spawns}
 [accounts]
-personal_code = {}
+personal_code = {code}
 [log]
 log_level = DEBUG
 log_packets = yes
-""".format(CS_PORT, GS_PORT, HOST, PERSONAL_CODE)
+"""
+# test monsters, Monster.txt columns: index rate name level life mana damage_min damage_max defense magic_defense
+# attack_rate defense_rate move_range attack_type attack_range view_range move_speed attack_speed regen_time ...
+MONSTERS = """
+2 1 "Budge Dragon" 4 5 0 1 1 0 0 0 0 0 0 1 5 300 500 10 2 0 0 0 0 0 0 0 0
+3 1 "Spider" 2 100 0 4 7 0 0 0 0 0 0 1 0 400 1800 1 2 0 0 0 0 0 0 0 0
+5 1 "Hell Hound" 38 1400 0 500 500 0 0 0 0 0 0 1 5 300 500 10 2 0 0 0 0 0 0 0 0
+end
+"""
+# MonsterSetBase single monsters (type, map, leash, x, y, direction), each appears within 3 tiles of its spot:
+# a spider that doesn't look (view range 0) at the east exit of Lorencia, a dragon hitting 1 north east of it, a hound
+# killing with one hit at the west exit. None of them wanders (move range 0)
+SPIDER_SPOT = (182, 126)
+DRAGON_SPOT = (200, 100)
+HOUND_SPOT = (90, 128)
+SPAWNS = """
+2
+003 00 30 {} {} -1
+002 00 30 {} {} -1
+005 00 30 {} {} -1
+end
+""".format(*SPIDER_SPOT, *DRAGON_SPOT, *HOUND_SPOT)
 
 # x, y step of each walk direction
 STEPS = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)]
-# start areas: Lorencia gate 17, Noria gate 27 for elves (Move/Gate.txt)
+# start areas: Lorencia gate 17, Noria gate 27 for elves (the client's Gate.bmd)
 LORENCIA = (0, range(133, 152), range(118, 136))
 NORIA = (3, range(171, 178), range(108, 118))
-# where A and B stand for the tests in view: outside the east exit of Lorencia, next to the spiders the server puts
-# there (x 177..185, y 124..128). The walks from here stay on walkable tiles outside the safe zone
+# gate 23 in Lorencia leads to gate 24 in Noria, from level 10
+NORIA_GATE = (23, range(213, 218), range(246, 248))
+NORIA_ARRIVAL = (3, range(148, 156), range(5, 7), 5)
+# where A and B stand for the tests in view: outside the east exit of Lorencia, next to the spider (x 179..185,
+# y 123..129). The walks from here stay on walkable tiles outside the safe zone
 A_SPOT = (180, 127)
 B_SPOT = (178, 126)
+# Lorencia terrain, the client's file: 3 byte header, then y * 256 + x. 0x04 wall, 0x08 no ground, 0x01 safe zone
+TERRAIN = (ROOT / 'data/terrain/Terrain1.att').read_bytes()[3:]
 # create class (class number << 2) -> str, agi, vit, ene, life, mana (DefaultClassInfo.txt)
 CLASS_STATS = {0: (18, 18, 15, 30, 60, 60), 16: (28, 20, 25, 10, 110, 20), 32: (22, 25, 20, 15, 80, 30)}
 # character info [4..41]
@@ -152,6 +182,28 @@ def of(head, cid, at=3):
     return pred
 
 
+# list packets: offset of the count, of the first entry, entry size
+LISTS = {0x12: (4, 5, 32), 0x13: (4, 5, 12), 0x14: (3, 4, 2)}
+
+
+def entries(p):
+    """Entries of a 12 / 13 / 14 list packet."""
+    count_at, start, size = LISTS[p.head]
+    return [p[start + i * size:start + (i + 1) * size] for i in range(p[count_at])]
+
+
+def entry(p, cid):
+    """The entry for cid of a list packet, the cid is its first 2 bytes."""
+    return next(e for e in entries(p) if (e[0] << 8 | e[1]) & 0x7FFF == cid)
+
+
+def listed(head, cid):
+    """12 / 13 / 14 list packet with an entry for cid."""
+    def pred(p):
+        return p.head == head and any((e[0] << 8 | e[1]) & 0x7FFF == cid for e in entries(p))
+    return pred
+
+
 def name10(s):
     return list(s.encode().ljust(10, b'\0'))
 
@@ -174,13 +226,37 @@ def walk(x, y, steps, direction):
     return [0xC1, 0, 0x10, x, y, direction << 4 | len(steps), *path]
 
 
-def walk_to(conn, start, target):
-    """Walks straight (diagonals first) from start to target, at most 15 steps per request."""
-    (x, y), steps = start, []
-    while (x, y) != target:
-        dx, dy = (target[0] > x) - (target[0] < x), (target[1] > y) - (target[1] < y)
-        steps.append(STEPS.index((dx, dy)))
-        x, y = x + dx, y + dy
+def walkable(x, y):
+    return 0 <= x < 256 and 0 <= y < 256 and not TERRAIN[y * 256 + x] & 0x0C
+
+
+def find_path(start, target):
+    """Shortest walkable path in Lorencia from start to target, the tiles after start."""
+    came = {start: None}
+    todo = deque([start])
+    while todo:
+        tile = todo.popleft()
+        if tile == target:
+            path = []
+            while tile != start:
+                path.append(tile)
+                tile = came[tile]
+            return path[::-1]
+        for dx, dy in STEPS:
+            n = tile[0] + dx, tile[1] + dy
+            if n not in came and walkable(*n):
+                came[n] = tile
+                todo.append(n)
+    raise AssertionError('no path from {} to {}'.format(start, target))
+
+
+def walk_path(conn, start, target):
+    """Walks around the walls from start to target in walks of 15 steps, returns target."""
+    x, y = start
+    steps = []
+    for tx, ty in find_path(start, target):
+        steps.append(STEPS.index((tx - x, ty - y)))
+        x, y = tx, ty
     x, y = start
     for i in range(0, len(steps), 15):
         part = steps[i:i + 15]
@@ -188,6 +264,34 @@ def walk_to(conn, start, target):
         for d in part:
             x, y = x + STEPS[d][0], y + STEPS[d][1]
     return target
+
+
+def near_tile(spot, distance):
+    """A walkable tile in Lorencia, outside the safe zone, distance tiles south of spot or around it."""
+    x, y = spot
+    for dx, dy in [(0, distance), (distance, 0), (-distance, 0), (0, -distance), (distance, distance)]:
+        if walkable(x + dx, y + dy) and not TERRAIN[(y + dy) * 256 + x + dx] & 0x01:
+            return x + dx, y + dy
+    raise AssertionError('nothing walkable {} tiles from {}'.format(distance, spot))
+
+
+def drain(conn, seconds):
+    """Reads what arrives for a while into the inbox."""
+    try:
+        conn.recv_until(lambda p: False, timeout=seconds)
+    except AssertionError:
+        pass
+
+
+def chat_round_trip(conn, name):
+    """Chat comes back to the sender: everything sent before it has been handled."""
+    conn.send([0xC1, 0, 0x00, *name10(name), *b'ping\0'])
+    conn.recv_until(lambda p: p.head == 0x00 and text(p[3:13]) == name, what='own chat')
+
+
+def life_value(p):
+    """Value of a 26 / 27 life or mana packet, [4..5] big endian."""
+    return p[4] << 8 | p[5]
 
 
 def in_area(info, area):
@@ -331,7 +435,7 @@ def play(servers, db_path):
     info = enter(a, 'Alice')
     check_new_character(info, 0, LORENCIA)
     check(info['skills'][:1] == [17], 'energy ball is the first skill')
-    walk_to(a, (info['x'], info['y']), A_SPOT)
+    walk_path(a, (info['x'], info['y']), A_SPOT)
     p = a.recv_until(key(0x13), what='meet monster')
     mob = p[5] << 8 | p[6]
     mob_xy = (p[11], p[12])
@@ -352,11 +456,11 @@ def play(servers, db_path):
     check(char_list(b)[0][15] == 32, 'char list class byte 32')
     info = enter(b, 'Bobby')
     check_new_character(info, 16, LORENCIA)
-    walk_to(b, (info['x'], info['y']), B_SPOT)
-    b.recv_until(of(0x12, a.cid, at=5), what='B sees A')
+    walk_path(b, (info['x'], info['y']), B_SPOT)
+    b.recv_until(listed(0x12, a.cid), what='B sees A')
     check(True, 'B sees A')
-    p = a.recv_until(of(0x12, b.cid, at=5), what='A sees B')
-    check(p[9] == 32, 'A sees B as a dark knight (class byte 32)')
+    p = a.recv_until(listed(0x12, b.cid), what='A sees B')
+    check(entry(p, b.cid)[4] == 32, 'A sees B as a dark knight (class byte 32)')
 
     print('framing: two packets in one write, then one split in halves')
     x, y = A_SPOT
@@ -376,21 +480,35 @@ def play(servers, db_path):
     print('walk out of view and back')
     a.send(walk(x, y, [3] * 10, 3))  # 10 steps east, still in view
     a.send(walk(x + 10, y, [3] * 10, 3))  # 20 east, 24 tiles from B, at least 17 from the spiders
-    b.recv_until(of(0x14, a.cid, at=4), what='B clears A')
+    b.recv_until(listed(0x14, a.cid), what='B clears A')
     check(True, 'B lost A from view')
-    a.recv_until(of(0x14, b.cid, at=4), what='A clears B')
-    a.recv_until(of(0x14, mob, at=4), what='A clears mob')
+    cleared = set()
+    while not {b.cid, mob} <= cleared:
+        p = a.recv_until(key(0x14), what='A clears B and the monster')
+        cleared.update((e[0] << 8 | e[1]) & 0x7FFF for e in entries(p))
     check(True, 'A lost B and the monster from view')
     a.send(walk(x + 20, y, [7] * 10, 7))  # back to 10 east
-    p = b.recv_until(of(0x12, a.cid, at=5), what='B meets A again')
-    check((p[7], p[8]) == (x + 10, y), 'B sees A again at {},{}'.format(x + 10, y))
-    a.recv_until(of(0x12, b.cid, at=5), what='A meets B again')
-    a.recv_until(of(0x13, mob, at=5), what='A meets mob again')
+    p = b.recv_until(listed(0x12, a.cid), what='B meets A again')
+    check(tuple(entry(p, a.cid)[2:4]) == (x + 10, y), 'B sees A again at {},{}'.format(x + 10, y))
+    a.recv_until(listed(0x12, b.cid), what='A meets B again')
+    a.recv_until(listed(0x13, mob), what='A meets mob again')
     check(True, 'A sees B and the monster again')
     a.send(walk(x + 10, y, [7] * 10, 7))
     b.recv_until(lambda p: of(0x10, a.cid)(p) and (p[5], p[6]) == (x, y), what='walk back')
     check(True, 'B sees A walk to {},{}'.format(x, y))
     a_pos = (x, y)
+
+    print('walls stop a walk')
+    stop = 0
+    while walkable(x, y - stop - 1):
+        stop += 1
+    check(stop < 8, 'a wall {} tiles north of {},{}'.format(stop + 1, x, y))
+    b.inbox.clear()
+    a.send(walk(x, y, [1] * 8, 1))
+    p = b.recv_until(of(0x10, a.cid), what='walk into the wall')
+    check((p[5], p[6]) == (x, y - stop), 'B sees A stop at {},{} in front of the wall'.format(x, y - stop))
+    a.send(walk(x, y - stop, [5] * stop, 5))
+    b.recv_until(lambda p: of(0x10, a.cid)(p) and (p[5], p[6]) == (x, y), what='walk back from the wall')
 
     print('chat')
     b.send([0xC1, 0, 0x00, *name10('Bobby'), *b'hello there\0'])
@@ -436,8 +554,8 @@ def play(servers, db_path):
     check((p[5], p[6], p[7] << 8 | p[8]) == (6, 0x64, mob), 'A sees B swing at the monster: ' + p.hex(' '))
     a.recv_until(key(0x17), what='A sees kill')
     check(True, 'A saw the kill')
-    p = a.recv_until(of(0x13, mob, at=5), timeout=8, what='respawn')
-    check(True, 'monster respawned at {},{}'.format(p[11], p[12]))
+    p = a.recv_until(listed(0x13, mob), timeout=8, what='respawn')
+    check(True, 'monster respawned at {},{}'.format(*entry(p, mob)[6:8]))
 
     print('A kills it with energy balls')
     killed = False
@@ -452,7 +570,7 @@ def play(servers, db_path):
     check(killed, 'monster killed by magic after {} casts'.format(i + 1))
     b.recv_until(lambda p: p.head == 0x17 and (p[6] << 8 | p[7]) == a.cid, what='B sees A kill')
     check(True, 'B saw A kill it')
-    a.recv_until(of(0x13, mob, at=5), timeout=8, what='respawn 2')
+    a.recv_until(listed(0x13, mob), timeout=8, what='respawn 2')
     b.inbox.clear()
 
     print('ping')
@@ -463,7 +581,7 @@ def play(servers, db_path):
 
     print('B disconnects')
     b.s.close()
-    a.recv_until(of(0x14, b.cid, at=4), what='clear on disconnect')
+    a.recv_until(listed(0x14, b.cid), what='clear on disconnect')
     check(True, 'A got B cleared after disconnect')
 
     print('B logs in again, character is still there')
@@ -472,14 +590,14 @@ def play(servers, db_path):
     check([text(e[1:11]) for e in char_list(b2)] == ['Bobby'], 'char list has Bobby')
     info = enter(b2, 'Bobby')
     check((info['x'], info['y'], info['exp']) == (*B_SPOT, 90), 'Bobby is where he left with the exp of his kill')
-    b2.recv_until(of(0x12, a.cid, at=5), what='B sees A after relog')
-    a.recv_until(of(0x12, b2.cid, at=5), what='A sees B again')
+    b2.recv_until(listed(0x12, a.cid), what='B sees A after relog')
+    a.recv_until(listed(0x12, b2.cid), what='A sees B again')
     check(True, 'A and B see each other again')
 
     print('A goes back to character select')
     p = logout(a, 1)
     check(p.encrypted and p[4] == 1, 'logout result type 1, encrypted: ' + p.hex(' '))
-    b2.recv_until(of(0x14, a.cid, at=4), what='B loses A')
+    b2.recv_until(listed(0x14, a.cid), what='B loses A')
     check(True, 'B lost A from view')
     check([text(e[1:11]) for e in char_list(a)] == ['Alice'], 'char list has Alice')
 
@@ -512,7 +630,7 @@ def play(servers, db_path):
     print('A enters again, where she logged out')
     info = enter(a, 'Alice')
     check((info['x'], info['y'], info['exp']) == (*a_pos, 90), 'Alice at {},{} with 90 exp'.format(*a_pos))
-    b2.recv_until(of(0x12, a.cid, at=5), what='B sees A back')
+    b2.recv_until(listed(0x12, a.cid), what='B sees A back')
     a.send(walk(*a_pos, [3, 3], 3))
     a_pos = (a_pos[0] + 2, a_pos[1])
     b2.recv_until(lambda p: of(0x10, a.cid)(p) and (p[5], p[6]) == a_pos, what='A walks')
@@ -534,7 +652,7 @@ def play(servers, db_path):
         check(row == a_pos, 'shutdown saved Alice at {},{}'.format(*row))
         password_hash = db.execute('SELECT password_hash FROM accounts WHERE name = ?', ('alice',)).fetchone()[0]
         check(password_hash.startswith('scrypt$') and 'pw1' not in password_hash, 'password stored hashed')
-        db.execute('UPDATE characters SET zen = 31337 WHERE name = ?', ('Alice',))
+        db.execute('UPDATE characters SET zen = 31337, level = 10 WHERE name = ?', ('Alice',))
     servers['bin/gs.py'].start()
 
     a = login_ok('alice', 'pw1')
@@ -550,8 +668,68 @@ def play(servers, db_path):
     b3 = login_ok('bob', 'pw2')
     info = enter(b3, 'Bobby')
     check((info['x'], info['y'], info['exp']) == (*B_SPOT, 90), 'Bobby too')
-    a.recv_until(of(0x12, b3.cid, at=5), what='A sees B after the restart')
+    a.recv_until(listed(0x12, b3.cid), what='A sees B after the restart')
     check(True, 'A sees B after the restart')
+    max_life, max_mana = info['max_life'], info['max_mana']
+
+    print('a monster chases and hits')
+    look = walk_path(b3, B_SPOT, near_tile(DRAGON_SPOT, 10))
+    p = b3.recv_until(lambda p: p.head == 0x13 and any(e[2] == 2 for e in entries(p)), what='B meets the dragon')
+    e = next(e for e in entries(p) if e[2] == 2)
+    dragon, dragon_xy = (e[0] << 8 | e[1]) & 0x7FFF, (e[6], e[7])
+    check(True, 'B sees the dragon at {},{}'.format(*dragon_xy))
+    spot = walk_path(b3, look, near_tile(dragon_xy, 4))
+    b3.recv_until(of(0x10, dragon), what='dragon walks to B')
+    check(True, 'the dragon comes for B at {},{}'.format(*spot))
+    p = b3.recv_until(of(0x18, dragon), timeout=5, what='dragon attacks')
+    check(p[6] == 0x64, 'B sees the dragon attack, animation 0x64: ' + p.hex(' '))
+    p = b3.recv_until(of(0x15, b3.cid), what='damage to B')
+    check(damage(p) == 1, 'B takes 1 damage')
+    p = b3.recv_until(key(0x26), what='life')
+    check(len(p) == 6 and p[3] == 0xFF and life_value(p) == max_life - 1, 'life 26 FF, value big endian: ' + p.hex(' '))
+
+    print('B gets away, life regenerates')
+    walk_path(b3, spot, B_SPOT)
+    drain(b3, 0.5)
+    life = min([life_value(p)] + [life_value(q) for q in b3.inbox if q.head == 0x26])
+    b3.inbox.clear()
+    p = b3.recv_until(lambda p: p.head == 0x26 and life_value(p) > life, timeout=5, what='regeneration')
+    check(True, 'life regenerates from {} to {}'.format(life, life_value(p)))
+    check(not any(p.head == 0x15 for p in b3.inbox), 'no more hits')
+
+    print('a monster kills B, B comes back in town')
+    look = walk_path(b3, B_SPOT, near_tile(HOUND_SPOT, 10))
+    p = b3.recv_until(lambda p: p.head == 0x13 and any(e[2] == 5 for e in entries(p)), what='B meets the hound')
+    e = next(e for e in entries(p) if e[2] == 5)
+    walk_path(b3, look, near_tile((e[6], e[7]), 3))
+    b3.recv_until(of(0x17, b3.cid), timeout=5, what='B killed')
+    check(True, 'B is killed')
+    p = b3.recv_until(key(0xF3, 0x04), timeout=6, what='respawn')
+    x, y, map_id, _, life, mana, exp, money = struct.unpack('<4B2H2I', bytes(p[4:20]))
+    check(len(p) == 20 and in_area({'map': map_id, 'x': x, 'y': y}, LORENCIA),
+          'B respawns at {},{} in Lorencia: {}'.format(x, y, p.hex(' ')))
+    check((life, mana, exp, money) == (max_life, max_mana, 90, 0), 'full life and mana, level 1 keeps its exp')
+
+    print('gates: Lorencia to Noria through gate 23, from level 10')
+    gate, xs, ys = NORIA_GATE
+    walk_path(b3, (x, y), (xs[0], ys[0]))
+    b3.send([0xC1, 0, 0x1C, gate, 0, 0], encrypt=True)
+    chat_round_trip(b3, 'Bobby')
+    check(not any(p.head == 0x1C for p in b3.inbox), 'level 1 B stays in Lorencia')
+    a.send([0xC1, 0, 0x1C, gate, 0, 0], encrypt=True)
+    chat_round_trip(a, 'Alice')
+    check(not any(p.head == 0x1C for p in a.inbox), 'A away from the gate stays')
+    walk_path(a, a_pos, (xs[1], ys[0]))
+    b3.recv_until(listed(0x12, a.cid), what='B sees A at the gate')
+    a.send([0xC1, 0, 0x1C, gate, 0, 0], encrypt=True)
+    p = a.recv_until(key(0x1C), what='map change')
+    map_id, xs, ys, direction = NORIA_ARRIVAL
+    check(p.encrypted and len(p) == 8 and p[3] == 1 and p[4] == map_id and p[5] in xs and p[6] in ys
+          and p[7] == direction, 'A moves to Noria at {},{}: {}'.format(p[5], p[6], p.hex(' ')))
+    a.send([0xC1, 0, 0xF3, 0x12])
+    b3.recv_until(listed(0x14, a.cid), what='B loses A')
+    check(True, 'B lost A from view')
+    chat_round_trip(a, 'Alice')
 
 
 def port_open(port):
@@ -595,7 +773,12 @@ def main():
     tmp = tempfile.TemporaryDirectory(prefix='mu-test-')
     db_path = os.path.join(tmp.name, 'mu.db')
     config = os.path.join(tmp.name, 'config.ini')
-    Path(config).write_text(CONFIG.format(db_path))
+    monsters = os.path.join(tmp.name, 'Monster.txt')
+    spawns = os.path.join(tmp.name, 'MonsterSetBase.txt')
+    Path(monsters).write_text(MONSTERS)
+    Path(spawns).write_text(SPAWNS)
+    Path(config).write_text(CONFIG.format(cs_port=CS_PORT, gs_port=GS_PORT, host=HOST, db=db_path, monsters=monsters,
+                                          spawns=spawns, code=PERSONAL_CODE))
     servers = {script: Server(script, port, config) for script, port in (('bin/cs.py', CS_PORT), ('bin/gs.py', GS_PORT))}
     try:
         for s in servers.values():

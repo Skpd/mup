@@ -1,48 +1,34 @@
 import logging
 from mup.packet.client import CMove
-from mup.packet.server import SClear, SMeetMonster, SMove, SMeetPlayer
 from mup.server.protocol import BaseProtocol
+from mup.server.world import distance
 
 logger = logging.getLogger(__name__)
 
+# a walk starts where the client is, somewhere on its last walk of at most 15 steps
+MAX_START_DISTANCE = 15
+
 
 def move_handler(msg: CMove, proto: BaseProtocol):
-    logger.debug('Move from %s %s to %s %s. Path: %s', msg.x, msg.y, msg.target_x, msg.target_y, msg.path.hex())
-
-    # todo check move available and legit
-
     p = proto.player
-    if p is None:
+    if p is None or p.dead:
         return
 
-    server = proto.server
-    old_players = set(server.get_players_within(p.map_id, p.x, p.y))
-    old_monsters = set(server.get_monsters_within(p.map_id, p.x, p.y))
+    logger.debug('%s walks from %s,%s, %s steps to %s,%s', p.name, msg.x, msg.y, len(msg.steps), msg.target_x, msg.target_y)
+    terrain = proto.server.maps[p.map_id].terrain
+    if distance(msg.x, msg.y, p.x, p.y) > MAX_START_DISTANCE or not terrain.walkable(msg.x, msg.y):
+        logger.warning('%s at %s,%s can\'t walk from %s,%s', p.name, p.x, p.y, msg.x, msg.y)
+        return
 
-    p.x = msg.target_x
-    p.y = msg.target_y
-    p.direction = msg.direction
+    x, y = msg.x, msg.y
+    path = [(x, y)]
+    for dx, dy in msg.steps:
+        if not terrain.walkable(x + dx, y + dy):
+            logger.warning('%s walks into %s,%s (attribute %s), stopped at %s,%s', p.name, x + dx, y + dy,
+                           terrain.attribute(x + dx, y + dy) if 0 <= x + dx < 256 and 0 <= y + dy < 256 else None, x, y)
+            break
+        x, y = x + dx, y + dy
+        path.append((x, y))
 
-    new_players = set(server.get_players_within(p.map_id, p.x, p.y))
-    new_monsters = set(server.get_monsters_within(p.map_id, p.x, p.y))
-    old_players.discard(proto)
-    new_players.discard(proto)
-
-    for c in old_players - new_players:
-        c.write(SClear.of([proto.cid]))
-        proto.write(SClear.of([c.cid]))
-
-    for c in new_players - old_players:
-        c.write(SMeetPlayer.of([(proto.cid, p)]))
-        proto.write(SMeetPlayer.of([(c.cid, c.player)]))
-
-    for m in old_monsters - new_monsters:
-        proto.write(SClear.of([m.cid]))
-
-    for m in new_monsters - old_monsters:
-        proto.write(SMeetMonster.of([m]))
-
-    # the mover walks on its own, others only need the target
-    move = SMove(cid=proto.cid, x=p.x, y=p.y, direction=p.direction << 4)
-    for c in old_players & new_players:
-        c.write(move)
+    p.walk_path = path
+    proto.server.walk(proto, x, y, msg.direction)

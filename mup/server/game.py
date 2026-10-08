@@ -1,33 +1,29 @@
+import asyncio
 import logging
-from datetime import datetime
+from collections import Counter
 from itertools import count
-from random import randint, choice
-from mup.common.interval import Interval
 from mup.config import Config
-from mup.model.monster import Monster
-from mup.model.player import Player
-from mup.packet.server import SServerJoin, SMeetMonster, SClear
+from mup.packet.server import SServerJoin, SStats, SInventory, SMeetPlayer, SSkillList, SMove
 from mup.repository import database
 from mup.repository.account import AccountRepository
 from mup.repository.character import CharacterRepository
+from mup.server import ai, combat, gate, monster, view
 from mup.server.base import ServerBase
+from mup.server.character import respawn_gate
+from mup.server.world import load_maps
 
 logger = logging.getLogger(__name__)
 
-# placeholders until the monster spawns of roadmap M2: weak monsters just outside each Lorencia town exit, the client
-# doesn't allow attacks in the safe zone. Monster type, x and y range of an open area (Terrain1.att)
-LORENCIA_EXITS = [
-    (2, range(130, 139), range(82, 87)),  # north, budge dragons
-    (3, range(177, 186), range(124, 129)),  # east, spiders
-    (3, range(129, 139), range(173, 178)),  # south, spiders
-    (2, range(87, 94), range(124, 132)),  # west, budge dragons
-]
-MONSTERS_PER_EXIT = 3
+TERRAIN_PATH = 'data/terrain'  # the client's World*/Terrain*.att
+GATE_PATH = 'data/Gate.bmd'  # the client's
+TICK = 0.1  # seconds between game ticks
 
 
 class GameServer(ServerBase):
-    viewport_width = 16
-    viewport_bit = 4  # bit length of viewport width - 1
+    """
+    The game: connections by cid, maps with the players and monsters on them. Packets are handled as they arrive,
+    everything that happens on its own (monsters, respawns, regeneration, autosave) runs in the tick.
+    """
     first_player_cid = 4800  # monsters take the lower ids
 
     def __init__(self, loop, config: Config):
@@ -40,115 +36,145 @@ class GameServer(ServerBase):
         self.accounts = AccountRepository(self.db)
         self.characters = CharacterRepository(self.db)
 
-        cids = count(1)
-        for type_id, xs, ys in LORENCIA_EXITS:
-            for _ in range(MONSTERS_PER_EXIT):
-                mob = Monster(next(cids), type_id)
-                mob.spawn_area = (xs, ys)
-                mob.x = choice(xs)
-                mob.y = choice(ys)
-                mob.dead = False
-                self.connections[mob.cid] = mob
+        self.maps = load_maps(TERRAIN_PATH)
+        self.gates = gate.load(GATE_PATH)
+        info = monster.load_info(config.monster_info)
+        spawns = monster.load_spawns(config.monster_spawns, info)
+        self.monsters = {m.cid: m for m in monster.create(spawns, info, count(1), self.first_player_cid - 1)}
+        self.dead_monsters = set()
+        now = self.now
+        missing = [m for m in self.monsters.values() if not monster.spawn(self, m, now)]
+        if missing:
+            # spawns of the later version's file on tiles that are walls in this client's terrain
+            logger.warning('No free spot for %s monsters, left out: %s', len(missing), dict(Counter(
+                '{} {}'.format(self.maps[m.map_id].name, m.info.name) for m in missing)))
+            for m in missing:
+                del self.monsters[m.cid]
+        logger.info('%s monsters on %s maps', len(self.monsters), len({m.map_id for m in self.monsters.values()}))
 
-        # respawn init
-        self.monster_spawner = Interval(self.monster_spawn, 1)
-        self.monster_spawner.start()
+        self.next_save = now + config.autosave_interval
+        self.task = None
 
-        self.autosave = Interval(self.save_all, config.autosave_interval)
-        self.autosave.start()
-        return
+    @property
+    def now(self):
+        """The game clock, seconds."""
+        return self.loop.time()
 
-        # spawn
-        vp_start_x = 128 >> self.viewport_bit << self.viewport_bit
-        vp_start_y = 188 >> self.viewport_bit << self.viewport_bit
-        vp_key = (vp_start_x, vp_start_y, vp_start_x+self.viewport_width, vp_start_y+self.viewport_width)
-        for i in range(1, 10):
-            mob = Monster(i, 6)
-            mob.spawn_area = (
-                range(vp_start_x, vp_start_x + self.viewport_width),
-                range(vp_start_y, vp_start_y + self.viewport_width)
-            )
-            mob.dead = True
-            # mob.x = random.randint(vp_start_x, vp_start_x + self.viewport_width)
-            # mob.y = random.randint(vp_start_y, vp_start_y + self.viewport_width)
-            # if i % 2 == 0:
-            # from mup.server.move_strategy.passive_scared import move
-            # else:
-            from mup.server.move_strategy.passive_wander import move
+    def start(self):
+        self.task = self.loop.create_task(self.run())
 
-            mob.move_strategy = move
-            # mob.move_strategy = None
+    async def run(self):
+        next_tick = self.now
+        while True:
+            self.tick(self.now)
+            next_tick += TICK
+            delay = next_tick - self.now
+            if delay < 0:
+                if delay < -1:
+                    logger.warning('Game tick %.0f ms late', -delay * 1000)
+                next_tick = self.now
+                delay = 0
+            await asyncio.sleep(delay)
 
-            self.connections[mob.cid] = mob
-            # self.viewports[0][vp_key][mob.cid] = mob
-            logger.debug('Added Mob #%s:#%s to %s with xy %s:%s', mob.type_id, mob.cid, vp_key, mob.x, mob.y)
+    def tick(self, now):
+        """One step of the game: monsters near players act, the dead come back, regeneration, autosave."""
+        for m in self.maps.values():
+            if len(m.players):
+                self._run(ai.tick, self, m, now)
+        for mob in [mob for mob in self.dead_monsters if mob.respawn_at <= now]:
+            self._run(monster.respawn, self, mob, now)
+        for c in self.playing():
+            self._run(self._player_tick, c, now)
+        if now >= self.next_save:
+            self.next_save = now + self.config.autosave_interval
+            self._run(self.save_all)
 
-        # mover init
-        self.monster_mover = Interval(self.monster_move, 1)
-        self.monster_mover.start()
+    @staticmethod
+    def _run(step, *args):
+        # one failing step doesn't stop the others
+        try:
+            step(*args)
+        except Exception:
+            logger.exception('%s failed', step.__name__)
 
-        # respawn init
-        self.monster_spawner = Interval(self.monster_spawn, 1)
-        self.monster_spawner.start()
+    def _player_tick(self, c, now):
+        p = c.player
+        if p.respawn_at is not None:
+            if now >= p.respawn_at:
+                combat.respawn(self, c)
+        elif now >= p.next_regen_at:
+            p.next_regen_at = now + combat.REGEN_INTERVAL
+            combat.regen(c)
 
-    def monster_spawn(self):
-        now = int(datetime.utcnow().timestamp())
-        for _, m in self.connections.items():
-            if isinstance(m, Monster) and m.dead and (m.died_at + m.respawn_interval) <= now:
-                # players near the corpse may still have it
-                for c in self.get_players_within(m.map_id, m.x, m.y):
-                    c.write(SClear.of([m.cid]))
+    def playing(self):
+        return [c for c in self.connections.values() if c.player is not None]
 
-                m.life = m.max_life
-                m.x = choice(m.spawn_area[0])
-                m.y = choice(m.spawn_area[1])
-                m.dead = False
+    def gate_spot(self, number):
+        """Map and a random walkable tile of a gate's area."""
+        g = self.gates[number]
+        x, y = self.maps[g.map_id].terrain.random_spot(g.xs, g.ys)
+        return g.map_id, x, y
 
-                for c in self.get_players_within(m.map_id, m.x, m.y):
-                    c.write(SMeetMonster.of([m]))
+    def enter_world(self, c, p):
+        """c enters the game with character p: character info, then the player appears on its map."""
+        m = self.maps.get(p.map_id)
+        if p.dead or m is None or not m.terrain.walkable(p.x, p.y):
+            # died and left, or stands where nobody can
+            p.map_id, p.x, p.y = self.gate_spot(respawn_gate(p.map_id if m is not None else 0))
+            p.life = p.max_life
+        p.respawn_at = None
+        p.next_regen_at = self.now + combat.REGEN_INTERVAL
+        p.walk_path = []
+        c.player = p
+        c.playing = True
+        c.view = set()
 
-    def monster_move(self):
-        for _, m in self.connections.items():
-            if isinstance(m, Monster) and not m.dead:
-                if callable(m.move_strategy):
-                    # print('calling ', m.move_strategy, m, self)
-                    m.move_strategy(m, self)
+        # no weather packet (0x0F): this client ignores what other versions send on join
+        c.write(SStats.of(p))
+        c.write(SInventory())
+        c.write(SMeetPlayer.of([(c.cid, p)]))
+        c.write(SSkillList.of(p.skills))
+        self.maps[p.map_id].add_player(c)
+        view.refresh(self, c)
 
-    def get_players_within(self, map_id, x, y, distance=16):
-        return self.get_all_within_distance(map_id, x, y, distance=distance, class_match=Player)
+    def leave_world(self, c):
+        """Saves the character of connection c and takes it out of the game, the account stays logged in."""
+        self.save(c)
+        view.forget(self, c)
+        self.maps[c.player.map_id].remove_player(c)
+        c.player = None
+        c.playing = False
 
-    def get_monsters_within(self, map_id, x, y, distance=16):
-        return self.get_all_within_distance(map_id, x, y, distance=distance, class_match=Monster)
+    def walk(self, c, x, y, direction):
+        """c's player walks to x, y on its map: the players who see it get the walk."""
+        p = c.player
+        self.maps[p.map_id].move_player(c, x, y)
+        p.direction = direction
+        move = SMove(cid=c.cid, x=x, y=y, direction=direction << 4)
+        for o in view.refresh(self, c):
+            o.write(move)
 
-    def get_all_within_distance(self, map_id, x, y, distance=16, class_match=None):
-        result = []
-        for _, c in self.connections.items():
-            if isinstance(c, Monster) and not c.dead and c.map_id == map_id:
-                if class_match is None or class_match == Monster:
-                    if abs(c.x - x) <= distance and abs(c.y - y) <= distance:
-                        result.append(c)
-            if getattr(c, 'player', None) is not None and c.player.map_id == map_id:
-                if class_match is None or class_match == Player:
-                    if abs(c.player.x - x) <= distance and abs(c.player.y - y) <= distance:
-                        result.append(c)
-        return result
+    def relocate(self, c, map_id, x, y, direction, announce):
+        """
+        c's player moves to x, y of map_id at once. announce(player) is the packet telling the client (1C, F3 04),
+        the client clears its objects on it, so everything in view is sent again.
+        """
+        p = c.player
+        view.forget(self, c)
+        self.maps[p.map_id].remove_player(c)
+        p.map_id, p.x, p.y, p.direction = map_id, x, y, direction
+        p.walk_path = []
+        self.maps[map_id].add_player(c)
+        c.write(announce(p))
+        view.refresh(self, c)
 
     def disconnect(self, c):
         self.connections.pop(c.cid, None)
         if c.player is not None:
             self.leave_world(c)
 
-    def leave_world(self, c):
-        """Saves the character of connection c and takes it out of the game, the account stays logged in."""
-        p = c.player
-        self.save(c)
-        c.player = None
-        c.playing = False
-        for other in self.get_players_within(p.map_id, p.x, p.y):
-            other.write(SClear.of([c.cid]))
-
     def account_online(self, account_id):
-        return any(getattr(c, 'acc', None) is not None and c.acc.id == account_id for c in self.connections.values())
+        return any(c.acc is not None and c.acc.id == account_id for c in self.connections.values())
 
     def save(self, c):
         """Writes the character of connection c. A failed write is logged, the game goes on."""
@@ -158,7 +184,7 @@ class GameServer(ServerBase):
             logger.exception('Failed to save %s', c.player.name)
 
     def save_all(self):
-        players = [c for c in self.connections.values() if getattr(c, 'player', None) is not None]
+        players = self.playing()
         for c in players:
             self.save(c)
         if players:
@@ -166,8 +192,8 @@ class GameServer(ServerBase):
 
     def shutdown(self):
         """Saves the characters in game and closes the database."""
-        self.monster_spawner.stop()
-        self.autosave.stop()
+        if self.task is not None:
+            self.task.cancel()
         self.save_all()
         self.db.close()
 
@@ -175,10 +201,3 @@ class GameServer(ServerBase):
         c.cid = next(self.cids)
         self.connections[c.cid] = c
         c.write(SServerJoin(cid=c.cid))
-
-    def get_player_connection(self, c):
-        if c in self.connections:
-            if c.playing:
-                return c
-
-        return None

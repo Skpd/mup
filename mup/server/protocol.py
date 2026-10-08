@@ -27,6 +27,7 @@ class BaseProtocol(Protocol):
     playing = False
     server_tick = None
     client_tick = None
+    view = None  # players and monsters this client has in view (mup.server.view)
 
     def __init__(self, gs):
         self.crypt = Crypt(decode_keys='data/Dec1.dat', encode_keys='data/Enc2.dat')
@@ -34,6 +35,7 @@ class BaseProtocol(Protocol):
         self.server = gs
         self.buffer = bytearray()
         self.logger = logger
+        self.view = set()
 
     @property
     def tag(self):
