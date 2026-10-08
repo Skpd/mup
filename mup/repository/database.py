@@ -78,6 +78,26 @@ MIGRATIONS = [
         PRIMARY KEY (guild_id, character_id)
     );
     """,
+    # roadmap M3: the item fields, the table had no rows yet. Item bytes in docs/protocol-097.md
+    """
+    DROP TABLE items;
+    CREATE TABLE items (
+        id INTEGER PRIMARY KEY,
+        serial INTEGER NOT NULL UNIQUE,
+        owner TEXT NOT NULL CHECK (owner IN ('inventory', 'warehouse')),
+        character_id INTEGER REFERENCES characters (id) ON DELETE CASCADE,
+        account_id INTEGER REFERENCES accounts (id),
+        slot INTEGER NOT NULL,
+        type INTEGER NOT NULL,
+        level INTEGER NOT NULL DEFAULT 0,
+        durability INTEGER NOT NULL DEFAULT 0,
+        skill INTEGER NOT NULL DEFAULT 0,
+        luck INTEGER NOT NULL DEFAULT 0,
+        option INTEGER NOT NULL DEFAULT 0,
+        excellent INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX items_character ON items (character_id);
+    """,
 ]
 
 

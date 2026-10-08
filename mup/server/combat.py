@@ -1,7 +1,7 @@
 import logging
 from mup.model.monster import Monster
 from mup.packet.server import SDamage, SAnnouncement, SKill, SExp, SLevelUp, SLife, SMana, SRespawn
-from mup.server import monster, view
+from mup.server import ground, loot, monster, view
 from mup.server.character import respawn_gate
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ EXP_LOSS = 0.02  # of the exp of the level, usual 0.97 value
 
 
 def hit_monster(proto, mob: Monster, dmg, flags=0):
-    """Damage from proto's player to a monster, with kill, exp and level up. flags: SDamage colour flags."""
+    """Damage from proto's player to a monster, with kill, exp, level up and loot. flags: SDamage colour flags."""
     game = proto.server
     p = proto.player
     nearby = view.viewers(game, mob)
@@ -45,6 +45,7 @@ def hit_monster(proto, mob: Monster, dmg, flags=0):
         if c != proto:
             c.write(SDamage.of(mob.cid, dmg, flags))
         c.write(SKill(cid=mob.cid, killer=proto.cid))
+    ground.drop_loot(game, mob.map_id, mob.x, mob.y, loot.roll(game, mob), proto)
 
 
 def hit_player(game, mob: Monster, c, dmg):

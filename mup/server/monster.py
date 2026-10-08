@@ -29,7 +29,7 @@ def load_info(path):
                 number=n, name=v[2], level=int(v[3]), life=int(v[4]), damage_min=int(v[6]), damage_max=int(v[7]),
                 defense=int(v[8]), attack_rate=int(v[10]), defense_rate=int(v[11]), move_range=int(v[12]),
                 attack_range=int(v[14]), view_range=int(v[15]), move_speed=int(v[16]), attack_speed=int(v[17]),
-                regen_time=int(v[18]))
+                regen_time=int(v[18]), item_rate=int(v[20]), money_rate=int(v[21]), max_item_level=int(v[22]))
     return info
 
 

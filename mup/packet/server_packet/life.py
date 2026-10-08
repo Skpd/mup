@@ -2,7 +2,7 @@ from mup.packet.base import Packet, C1, u8, u16be
 
 
 class Life(Packet):
-    """C1 26: the player's life, or its maximum."""
+    """C1 26: the player's life, or its maximum, or unlocks item use."""
     code = C1, 0x26
     size = 6
     fields = (
@@ -12,6 +12,7 @@ class Life(Packet):
 
     CURRENT = 0xFF
     MAX = 0xFE
+    UNLOCK = 0xFD  # unlocks item use after a 26 request, value not read
 
 
 class Mana(Packet):

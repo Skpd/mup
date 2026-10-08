@@ -68,8 +68,8 @@ class Grid:
 
 class Map:
     """
-    One map: its terrain, the connections in game on it and its living monsters. Positions change through the
-    methods here, which keep the objects and the grids in step.
+    One map: its terrain, the connections in game on it, its living monsters and the items on the ground. Positions
+    change through the methods here, which keep the objects and the grids in step.
     """
 
     def __init__(self, number, terrain: Terrain):
@@ -79,6 +79,7 @@ class Map:
         self.players = Grid()  # connections
         self.monsters = Grid()  # living monsters
         self.occupied = Counter()  # tiles living monsters stand on
+        self.items = Grid()  # GroundItems
 
     def __repr__(self):
         return '<Map {} {}>'.format(self.number, self.name)
@@ -113,6 +114,13 @@ class Map:
         self.occupied[x, y] -= 1
         if self.occupied[x, y] <= 0:
             del self.occupied[x, y]
+
+    def add_item(self, g):
+        self.items.add(g, g.x, g.y)
+
+    def remove_item(self, g):
+        if g in self.items:
+            self.items.remove(g)
 
     def monster_can_stand(self, x, y):
         """Walkable, outside the safe zone and free of other monsters."""

@@ -20,6 +20,9 @@ class MonsterInfo:
     move_speed: int  # ms per step
     attack_speed: int  # ms between attacks
     regen_time: int  # seconds until it respawns
+    item_rate: int = 0  # drop chances, see mup.server.loot. 0: never
+    money_rate: int = 0
+    max_item_level: int = 0
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,7 @@ client does (same keys, encryption, xor and packet layouts, see docs/protocol-09
 usage: ./venv/bin/python tests/client.py
 Exits non zero on the first failed check and prints the end of the server logs.
 The servers run with their own config on ports 44415 and 55911, a database in a temporary directory and their own
-monsters (MONSTERS, SPAWNS), so the test can run next to the usual servers.
+monsters (MONSTERS, SPAWNS, DROPS), so the test can run next to the usual servers.
 """
 import os
 import socket
@@ -40,6 +40,7 @@ autosave_interval = 2
 [world]
 monster_info = {monsters}
 monster_spawns = {spawns}
+item_drops = {drops}
 [accounts]
 personal_code = {code}
 [log]
@@ -67,6 +68,19 @@ SPAWNS = """
 005 00 30 {} {} -1
 end
 """.format(*SPIDER_SPOT, *DRAGON_SPOT, *HOUND_SPOT)
+
+# fixed drops (monster type, item group, index, level, count, chance): every spider leaves a short sword, a small
+# healing potion and 30 zen. The test monsters have no random drops (ItemRate, MoneyRate 0)
+DROPS = """
+3 0 1 0 0 100
+3 14 1 0 0 100
+3 14 15 0 30 100
+"""
+# item bytes: type & 0xFF, skill << 7 | level << 3 | luck << 2 | option, durability, type bit 8 << 7 | excellent
+SWORD = bytes([0x01, 0x00, 22, 0x00])  # 0/1, durability 22
+POTION = bytes([0xC1, 0x00, 1, 0x80])  # 14/1: type 0x1C1, one potion
+ZEN_TYPE = 0x1CF
+NO_EQUIPMENT = bytes([0xFF] * 5 + [0, 0, 0, 0xF8, 0])
 
 # x, y step of each walk direction
 STEPS = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)]
@@ -202,6 +216,63 @@ def listed(head, cid):
     def pred(p):
         return p.head == head and any((e[0] << 8 | e[1]) & 0x7FFF == cid for e in entries(p))
     return pred
+
+
+def item_type(item):
+    return item[0] | (item[3] >> 7) << 8
+
+
+def ground_entries(p):
+    """Entries of a 20 packet as dicts: id, dropped flag, x, y, and the item bytes or the zen amount. Zen entries
+    are 9 bytes, the amount around the type bytes."""
+    found = []
+    at = 5
+    for _ in range(p[4]):
+        raw_id = p[at] << 8 | p[at + 1]
+        e = {'id': raw_id & 0x7FFF, 'dropped': bool(raw_id & 0x8000), 'x': p[at + 2], 'y': p[at + 3]}
+        item = bytes(p[at + 4:at + 8])
+        if item_type(item) == ZEN_TYPE:
+            e['zen'] = item[1] << 16 | item[2] << 8 | p[at + 8]
+            at += 9
+        else:
+            e['item'] = item
+            at += 8
+        found.append(e)
+    check(at == len(p), '20 entries fill the packet: ' + p.hex(' '))
+    return found
+
+
+def collect_drops(conn, count, what):
+    """The next count ground items conn is shown (20 packets)."""
+    found = []
+    while len(found) < count:
+        found += ground_entries(conn.recv_until(key(0x20), what=what))
+    return found
+
+
+def gone_ids(p):
+    """Item ids of a 21 packet: C2, count at [4], 2 bytes each."""
+    return [p[5 + i * 2] << 8 | p[6 + i * 2] for i in range(p[4])]
+
+
+def item_gone(conn, item_id, what):
+    conn.recv_until(lambda p: p.head == 0x21 and item_id in gone_ids(p), what=what)
+
+
+def pick_up(conn, item_id):
+    """C3 22 pick up, returns the 22 result."""
+    conn.send([0xC1, 0, 0x22, item_id >> 8, item_id & 0xFF], encrypt=True)
+    p = conn.recv_until(key(0x22), what='pick up result')
+    check(len(p) == 8, 'pick up result is 8 bytes: ' + p.hex(' '))
+    return p
+
+
+def move_item(conn, source, item, target):
+    """C3 24 move within the inventory, returns the C3 24 result."""
+    conn.send([0xC1, 0, 0x24, 0, source, *item, 0, target], encrypt=True)
+    p = conn.recv_until(key(0x24), what='move result')
+    check(p.encrypted and len(p) == 9, 'move result is C3, 9 bytes: ' + p.hex(' '))
+    return p
 
 
 def name10(s):
@@ -365,7 +436,9 @@ def enter(gs, char_name):
     p = gs.recv_until(key(0xF3, 0x03), what='char info')
     check(p.encrypted and len(p) == 42, 'char info is encrypted, 42 bytes')
     info = dict(zip(INFO_FIELDS, struct.unpack('<4B2I9H2xI2B', bytes(p[4:42]))))
-    gs.recv_until(key(0xF3, 0x10), what='inventory')
+    p = gs.recv_until(key(0xF3, 0x10), what='inventory')
+    check(p.encrypted and p[0] == 0xC2 and len(p) == 6 + 5 * p[5], 'inventory is C4, 5 bytes per item')
+    info['inventory'] = {p[6 + i * 5]: bytes(p[7 + i * 5:11 + i * 5]) for i in range(p[5])}
     p = gs.recv_until(of(0x12, gs.cid, at=5), what='meet self')
     check(p[4] == 1 and len(p) == 5 + 32 and text(p[23:33]) == char_name, 'meet self, one 32 byte entry, name at entry + 18')
     p = gs.recv_until(key(0xF3, 0x11), what='skill list')
@@ -385,6 +458,7 @@ def check_new_character(info, class_type, area):
     check((info['life'], info['max_life'], info['mana'], info['max_mana']) == (life, life, mana, mana),
           'full life {} and mana {}'.format(life, mana))
     check((info['money'], info['pk'], info['ctl']) == (0, 3, 0), 'no zen, pk level 3 (commoner), ctl 0')
+    check(info['inventory'] == {}, 'empty inventory')
 
 
 def logout(gs, kind):
@@ -431,7 +505,7 @@ def play(servers, db_path):
     check(p[4] == 1 and text(p[5:15]) == 'Alice' and p[15] == 0, 'char created in slot 0: ' + p.hex(' '))
     e = char_list(a)[0]
     check(e[0] == 0 and text(e[1:11]) == 'Alice' and e[12] | e[13] << 8 == 1 and e[15] == 0
-          and bytes(e[16:26]) == bytes([0xFF] * 5 + [0, 0, 0, 0xF8, 0]), 'char list entry ' + e.hex(' '))
+          and bytes(e[16:26]) == NO_EQUIPMENT, 'char list entry ' + e.hex(' '))
     info = enter(a, 'Alice')
     check_new_character(info, 0, LORENCIA)
     check(info['skills'][:1] == [17], 'energy ball is the first skill')
@@ -557,6 +631,50 @@ def play(servers, db_path):
     p = a.recv_until(listed(0x13, mob), timeout=8, what='respawn')
     check(True, 'monster respawned at {},{}'.format(*entry(p, mob)[6:8]))
 
+    print('the spider drops a sword, a potion and zen for B')
+    drops = collect_drops(b, 3, 'B sees the drops')
+    check(all(e['dropped'] for e in drops), 'B sees them fall (id bit 15)')
+    sword = next(e for e in drops if e.get('item') == SWORD)
+    potion = next(e for e in drops if e.get('item') == POTION)
+    zen = next(e for e in drops if 'zen' in e)
+    check((sword['x'], sword['y']) == mob_xy, 'the sword lies where the spider died, {},{}'.format(*mob_xy))
+    check(zen['zen'] == 30, '30 zen, the 24 bit amount around the zen type bytes')
+    check(all(max(abs(e['x'] - sword['x']), abs(e['y'] - sword['y'])) <= 2 for e in drops), 'the others next to it')
+    seen = collect_drops(a, 3, 'A sees the drops')
+    check({e['id'] for e in seen} == {e['id'] for e in drops}, 'A sees the same three')
+
+    print('picking up: the drop is B\'s for a while')
+    a_at = walk_path(a, a_pos, (sword['x'], sword['y']))
+    p = pick_up(a, sword['id'])
+    check(p[3] == 0xFF, 'A may not pick up B\'s sword yet: ' + p.hex(' '))
+    b_at = walk_path(b, B_SPOT, (sword['x'], sword['y']))
+    p = pick_up(b, sword['id'])
+    check(p[3] == 12 and bytes(p[4:8]) == SWORD, 'B picks up the sword into slot 12 (grid 0,0): ' + p.hex(' '))
+    item_gone(b, sword['id'], 'sword gone for B')
+    item_gone(a, sword['id'], 'sword gone for A')
+    check(True, 'A and B get 21 for the sword')
+    b_at = walk_path(b, b_at, (potion['x'], potion['y']))
+    p = pick_up(b, potion['id'])
+    check(p[3] == 13 and bytes(p[4:8]) == POTION, 'the potion goes into slot 13 (grid 1,0): ' + p.hex(' '))
+    b_at = walk_path(b, b_at, (zen['x'], zen['y']))
+    p = pick_up(b, zen['id'])
+    check(p[3] == 0xFE and bytes(p[4:8]) == (30).to_bytes(4, 'big'), 'zen: FE and the money, big endian: ' + p.hex(' '))
+    item_gone(a, zen['id'], 'zen gone for A')
+
+    print('moving items: B wears the sword, A sees it')
+    p = move_item(b, 13, POTION, 20)
+    check(p[3] == 0xFF, 'the potion doesn\'t go on the sword\'s second tile (slot 20)')
+    p = move_item(b, 13, POTION, 2)
+    check(p[3] == 0xFF, 'a potion is no helm')
+    p = move_item(b, 12, SWORD, 0)
+    check((p[3], p[4]) == (0, 0) and bytes(p[5:9]) == SWORD, 'B wears the sword in the right hand: ' + p.hex(' '))
+    p = a.recv_until(of(0x25, b.cid), what='look change')
+    check(len(p) == 9 and (p[5], p[6], p[8]) == (0x01, 0x00, 0x00),
+          'A gets 25: type 1, slot 0 << 4 | level 0: ' + p.hex(' '))
+    walk_path(a, a_at, a_pos)
+    walk_path(b, b_at, B_SPOT)
+    b.recv_until(lambda p: of(0x10, a.cid)(p) and (p[5], p[6]) == a_pos, what='A back')
+
     print('A kills it with energy balls')
     killed = False
     a.inbox.clear()
@@ -571,6 +689,30 @@ def play(servers, db_path):
     b.recv_until(lambda p: p.head == 0x17 and (p[6] << 8 | p[7]) == a.cid, what='B sees A kill')
     check(True, 'B saw A kill it')
     a.recv_until(listed(0x13, mob), timeout=8, what='respawn 2')
+
+    print('A takes the sword of her kill, can\'t wear it and drops it, B takes it')
+    drops = collect_drops(a, 3, 'A sees her drops')
+    sword = next(e for e in drops if e.get('item') == SWORD)
+    a_at = walk_path(a, a_pos, (sword['x'], sword['y']))
+    p = pick_up(a, sword['id'])
+    check(p[3] == 12 and bytes(p[4:8]) == SWORD, 'A picks up the sword into slot 12')
+    p = move_item(a, 12, SWORD, 0)
+    check(p[3] == 0xFF, 'a wizard has too little strength for it (18 of 25)')
+    a.send([0xC1, 0, 0x23, *a_at, 12], encrypt=True)
+    p = a.recv_until(key(0x23), what='drop result')
+    check(len(p) == 5 and (p[3], p[4]) == (1, 12), 'A drops it from slot 12: ' + p.hex(' '))
+    # B's inbox still has the drops of A's kill, the sword A took lay on the same tile
+    e = None
+    while e is None:
+        e = next((e for e in collect_drops(b, 1, 'B sees the sword fall')
+                  if e.get('item') == SWORD and e['id'] != sword['id']), None)
+    check(e['dropped'] and (e['x'], e['y']) == a_at, 'B sees it fall at {},{}'.format(*a_at))
+    b_at = walk_path(b, B_SPOT, a_at)
+    p = pick_up(b, e['id'])
+    check(p[3] == 12 and bytes(p[4:8]) == SWORD, 'B may pick up what a player dropped at once, slot 12 again')
+    walk_path(a, a_at, a_pos)
+    walk_path(b, b_at, B_SPOT)
+    b.recv_until(lambda p: of(0x10, a.cid)(p) and (p[5], p[6]) == a_pos, what='A back')
     b.inbox.clear()
 
     print('ping')
@@ -587,12 +729,17 @@ def play(servers, db_path):
     print('B logs in again, character is still there')
     b2 = login_ok('bob', 'pw2')
     check(b2.cid != b.cid, 'new connection gets a new cid {}'.format(b2.cid))
-    check([text(e[1:11]) for e in char_list(b2)] == ['Bobby'], 'char list has Bobby')
+    e = char_list(b2)
+    check([text(x[1:11]) for x in e] == ['Bobby'], 'char list has Bobby')
+    look = bytes([0x01]) + NO_EQUIPMENT[1:]
+    check(bytes(e[0][16:26]) == look, 'his look in the char list: the sword in the right hand ' + e[0][16:26].hex(' '))
     info = enter(b2, 'Bobby')
     check((info['x'], info['y'], info['exp']) == (*B_SPOT, 90), 'Bobby is where he left with the exp of his kill')
+    bobby_items = {0: SWORD, 12: SWORD, 13: POTION}
+    check(info['inventory'] == bobby_items and info['money'] == 30, 'with his items and 30 zen')
     b2.recv_until(listed(0x12, a.cid), what='B sees A after relog')
-    a.recv_until(listed(0x12, b2.cid), what='A sees B again')
-    check(True, 'A and B see each other again')
+    p = a.recv_until(listed(0x12, b2.cid), what='A sees B again')
+    check(bytes(entry(p, b2.cid)[5:15]) == look, 'A sees B again, with the sword (12 entry + 5)')
 
     print('A goes back to character select')
     p = logout(a, 1)
@@ -668,6 +815,7 @@ def play(servers, db_path):
     b3 = login_ok('bob', 'pw2')
     info = enter(b3, 'Bobby')
     check((info['x'], info['y'], info['exp']) == (*B_SPOT, 90), 'Bobby too')
+    check(info['inventory'] == bobby_items and info['money'] == 30, 'his items and zen too')
     a.recv_until(listed(0x12, b3.cid), what='A sees B after the restart')
     check(True, 'A sees B after the restart')
     max_life, max_mana = info['max_life'], info['max_mana']
@@ -688,13 +836,33 @@ def play(servers, db_path):
     p = b3.recv_until(key(0x26), what='life')
     check(len(p) == 6 and p[3] == 0xFF and life_value(p) == max_life - 1, 'life 26 FF, value big endian: ' + p.hex(' '))
 
+    print('B drinks the potion')
+    p = b3.recv_until(lambda p: p.head == 0x26 and p[3] == 0xFF and life_value(p) <= max_life - 3, what='3 hits')
+    before = life_value(p)
+    b3.send([0xC1, 0, 0x26, 13, 0], encrypt=True)
+    # regeneration adds 1 of 110 every 3 s, the dragon takes 1 every 0.5 s: only the potion brings back all life
+    p = b3.recv_until(lambda p: p.head == 0x26 and p[3] == 0xFF and life_value(p) == max_life, what='potion')
+    check(True, 'the potion heals B from {} to {}'.format(before, max_life))
+    p = b3.recv_until(key(0x28), what='potion used up')
+    check(len(p) == 5 and (p[3], p[4]) == (13, 1), 'it was the last one: 28 deletes slot 13, unlocks item use')
+    b3.inbox.clear()  # hits from before the potion
+    p = b3.recv_until(lambda p: p.head == 0x26 and p[3] == 0xFF and life_value(p) < max_life, what='hit again')
+
     print('B gets away, life regenerates')
     walk_path(b3, spot, B_SPOT)
     drain(b3, 0.5)
-    life = min([life_value(p)] + [life_value(q) for q in b3.inbox if q.head == 0x26])
+    # B is 1 below full life, the regeneration may have come while walking
+    life, regen = life_value(p), None
+    for q in b3.inbox:
+        if q.head == 0x26 and q[3] == 0xFF:
+            if regen is None and life_value(q) > life:
+                regen = life, life_value(q)
+            life = life_value(q)
     b3.inbox.clear()
-    p = b3.recv_until(lambda p: p.head == 0x26 and life_value(p) > life, timeout=5, what='regeneration')
-    check(True, 'life regenerates from {} to {}'.format(life, life_value(p)))
+    if regen is None:
+        p = b3.recv_until(lambda p: p.head == 0x26 and life_value(p) > life, timeout=5, what='regeneration')
+        regen = life, life_value(p)
+    check(True, 'life regenerates from {} to {}'.format(*regen))
     check(not any(p.head == 0x15 for p in b3.inbox), 'no more hits')
 
     print('a monster kills B, B comes back in town')
@@ -708,7 +876,7 @@ def play(servers, db_path):
     x, y, map_id, _, life, mana, exp, money = struct.unpack('<4B2H2I', bytes(p[4:20]))
     check(len(p) == 20 and in_area({'map': map_id, 'x': x, 'y': y}, LORENCIA),
           'B respawns at {},{} in Lorencia: {}'.format(x, y, p.hex(' ')))
-    check((life, mana, exp, money) == (max_life, max_mana, 90, 0), 'full life and mana, level 1 keeps its exp')
+    check((life, mana, exp, money) == (max_life, max_mana, 90, 30), 'full life and mana, level 1 keeps its exp')
 
     print('gates: Lorencia to Noria through gate 23, from level 10')
     gate, xs, ys = NORIA_GATE
@@ -775,10 +943,12 @@ def main():
     config = os.path.join(tmp.name, 'config.ini')
     monsters = os.path.join(tmp.name, 'Monster.txt')
     spawns = os.path.join(tmp.name, 'MonsterSetBase.txt')
+    drops = os.path.join(tmp.name, 'ItemDrop.txt')
     Path(monsters).write_text(MONSTERS)
     Path(spawns).write_text(SPAWNS)
+    Path(drops).write_text(DROPS)
     Path(config).write_text(CONFIG.format(cs_port=CS_PORT, gs_port=GS_PORT, host=HOST, db=db_path, monsters=monsters,
-                                          spawns=spawns, code=PERSONAL_CODE))
+                                          spawns=spawns, drops=drops, code=PERSONAL_CODE))
     servers = {script: Server(script, port, config) for script, port in (('bin/cs.py', CS_PORT), ('bin/gs.py', GS_PORT))}
     try:
         for s in servers.values():

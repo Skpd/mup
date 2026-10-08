@@ -3,11 +3,12 @@ import logging
 from collections import Counter
 from itertools import count
 from mup.config import Config
-from mup.packet.server import SServerJoin, SStats, SInventory, SMeetPlayer, SSkillList, SMove
+from mup.model.item import Item
+from mup.packet.server import SServerJoin, SStats, SMeetPlayer, SSkillList, SMove
 from mup.repository import database
 from mup.repository.account import AccountRepository
 from mup.repository.character import CharacterRepository
-from mup.server import ai, combat, gate, monster, view
+from mup.server import ai, combat, gate, ground, inventory, item, loot, monster, view
 from mup.server.base import ServerBase
 from mup.server.character import respawn_gate
 from mup.server.world import load_maps
@@ -16,13 +17,15 @@ logger = logging.getLogger(__name__)
 
 TERRAIN_PATH = 'data/terrain'  # the client's World*/Terrain*.att
 GATE_PATH = 'data/Gate.bmd'  # the client's
+ITEM_PATH = 'data/item.bmd'  # the client's
 TICK = 0.1  # seconds between game ticks
 
 
 class GameServer(ServerBase):
     """
-    The game: connections by cid, maps with the players and monsters on them. Packets are handled as they arrive,
-    everything that happens on its own (monsters, respawns, regeneration, autosave) runs in the tick.
+    The game: connections by cid, maps with the players, monsters and ground items on them. Packets are handled as
+    they arrive, everything that happens on its own (monsters, respawns, regeneration, ground items going away,
+    autosave) runs in the tick.
     """
     first_player_cid = 4800  # monsters take the lower ids
 
@@ -32,9 +35,14 @@ class GameServer(ServerBase):
         self.config = config
         self.cids = count(self.first_player_cid)
 
+        self.item_info = item.load_info(ITEM_PATH, config.item_info)
+        self.fixed_drops = loot.load_fixed(config.item_drops, self.item_info)
+        self.ground = ground.Ground()
+
         self.db = database.connect(config.db_path)
         self.accounts = AccountRepository(self.db)
-        self.characters = CharacterRepository(self.db)
+        self.characters = CharacterRepository(self.db, self.item_info)
+        self.serials = count(self.characters.last_item_serial() + 1)  # of new items
 
         self.maps = load_maps(TERRAIN_PATH)
         self.gates = gate.load(GATE_PATH)
@@ -51,6 +59,7 @@ class GameServer(ServerBase):
             for m in missing:
                 del self.monsters[m.cid]
         logger.info('%s monsters on %s maps', len(self.monsters), len({m.map_id for m in self.monsters.values()}))
+        logger.info('%s item types, fixed drops for %s monster types', len(self.item_info), len(self.fixed_drops))
 
         self.next_save = now + config.autosave_interval
         self.task = None
@@ -77,12 +86,15 @@ class GameServer(ServerBase):
             await asyncio.sleep(delay)
 
     def tick(self, now):
-        """One step of the game: monsters near players act, the dead come back, regeneration, autosave."""
+        """One step of the game: monsters near players act, the dead come back, regeneration, ground items go away,
+        autosave."""
         for m in self.maps.values():
             if len(m.players):
                 self._run(ai.tick, self, m, now)
         for mob in [mob for mob in self.dead_monsters if mob.respawn_at <= now]:
             self._run(monster.respawn, self, mob, now)
+        if len(self.ground):
+            self._run(ground.tick, self, now)
         for c in self.playing():
             self._run(self._player_tick, c, now)
         if now >= self.next_save:
@@ -105,6 +117,10 @@ class GameServer(ServerBase):
         elif now >= p.next_regen_at:
             p.next_regen_at = now + combat.REGEN_INTERVAL
             combat.regen(c)
+
+    def new_item(self, info, **values):
+        """A new Item of type info with the next serial."""
+        return Item(info, serial=next(self.serials), **values)
 
     def playing(self):
         return [c for c in self.connections.values() if c.player is not None]
@@ -131,7 +147,7 @@ class GameServer(ServerBase):
 
         # no weather packet (0x0F): this client ignores what other versions send on join
         c.write(SStats.of(p))
-        c.write(SInventory())
+        inventory.send(c)
         c.write(SMeetPlayer.of([(c.cid, p)]))
         c.write(SSkillList.of(p.skills))
         self.maps[p.map_id].add_player(c)

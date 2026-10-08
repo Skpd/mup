@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from mup.model.item import Item
 
 BASE_EXP = 100
@@ -81,7 +81,7 @@ class Player:
     x: int = 128
     y: int = 188
     direction: int = 0
-    inventory: List[Item] = field(default_factory=list)
+    inventory: Dict[int, Item] = field(default_factory=dict)  # slot -> item, see mup.model.item
     skills: List[int] = field(default_factory=list)
     # in game only, times are the game clock (GameServer.now)
     respawn_at: Optional[float] = None  # when a dead character comes back

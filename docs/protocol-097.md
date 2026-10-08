@@ -57,6 +57,7 @@ to this exe.
 | terrain attributes | `0x828d278`, 256 x 256 bytes, index `0x4aa780`: `(y & 0xFF) << 8 \| (x & 0xFF)` |
 | path finder | `0x425720`, state at `0x57c7208` (`+0x08` points to the attributes) |
 | gate check, sends `1C` | `0x474030`, every frame. `Gate.bmd` in memory at `0x7c11328` |
+| items | see [Items](#items): type from item bytes `0x459b80`, item from bytes `0x45a270`, place in a window `0x48d940`, remove `0x48e0d0`, put the held item back `0x48e650`, free space check `0x493880`. Held item `0x7d92a60` (`0x44` bytes), its source slot `0x7da71e0`, move pending `0x7dab7ad`. Equipment window `0x48eec0`, inventory window clicks and right click use `0x4916f0` |
 
 ## Transport
 
@@ -108,7 +109,7 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C1 F3 04` respawn | 20 bytes: `[4]` x `[5]` y `[6]` map `[7]` direction, `[8..9]` life `[10..11]` mana (little endian), `[12..15]` exp `[16..19]` money. Clears all 400 objects, creates the hero again at x, y and loads the map when it isn't the current one. The client sends nothing back | code `0x413b00` (asm: the decompile loses the packet pointer) |
 | `C1 F3 05` level up | `[4]` level `[6]` level up points `[8]` max life `[10]` max mana, 2 bytes each. Life and mana are set to the new max, the next level's exp is computed by the client (`0x45c980`, see [Client limits](#client-limits)) | code `0x41b6d0` (asm) |
 | `C1 F3 06` level up point result | `[4]` high nibble 0: nothing changes. Otherwise the low nibble is the stat (0 str, 1 agi, 2 vit, 3 ene): the client takes one level up point and adds 1 to the stat itself, vit also sets max life and ene max mana to `[6..7]`. No maximum is checked | code `0x41b9a0` (asm) |
-| `C4 F3 10` inventory | must be encrypted | code `0x414310` (index) |
+| `C4 F3 10` inventory | must be encrypted. `[5]` count, then 5 bytes each: `[+0]` slot, `[+1..4]` item (see [Items](#items)). Slots 0..11 equipment, 12..75 the 8 x 8 grid (`slot - 12 = y * 8 + x`, the item's top left tile). The client empties equipment and grid first, then places each item (`0x48d940`) | code `0x414310` |
 | `C1 F3 11` skill list | `[4]` count (max 20), then 3 bytes each: `[+0]` slot, `[+1]` skill number, `[+2]` unused. `[4]` = `0xFE`: set one skill, `[5]` slot `[6]` number. `[4]` = `0xFF`: remove skill at slot `[5]` | code `0x414010` |
 | `C1 00` chat | `[3..12]` name, `[13..72]` message. Message prefix `~` party, `@` guild, `#` shout, anything else normal chat | code `0x414960` |
 | `C1 0D` notice | `[3]` type, `[4..]` text | code `0x414d10` (reads only) |
@@ -125,8 +126,16 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C3 19` skill animation | must be encrypted: `[3]` skill number, `[4..5]` caster cid, `[6..7]` target cid (bit 15: effect applied) | code `0x4186b0` |
 | `C3 1C` map move | must be encrypted: `[3]` 0: teleport on the map with the teleport animation, objects stay. Anything else: map change, the client removes all objects but the hero, loads `[4]` when it isn't the current map and answers `F3 12`. `[4]` map, `[5]` x `[6]` y, `[7]` direction. Also ends the wait after its own `1C` request | code `0x415520` |
 | `C3 1E` area skill animation | must be encrypted: `[3]` skill number, `[4..5]` caster cid, `[6]` x `[7]` y | code `0x418fd0` |
-| `C1 26` life | `[3]` `FF`: life, `FE`: max life, value `[4..5]` **big endian**. `FD`: resets a timer (`0x57c7140`, presumably the potion delay). Other values: an item count at inventory slot `[3] - 12` goes down by one (potion use, M3) | code `0x41bcd0` (asm) |
+| `C2 20` items in view | `[4]` count, then 8 bytes each: `[+0..1]` item id BE (0..999, the client puts larger ids on 0), bit 15 set: just dropped (falls with a sound), `[+2]` x `[+3]` y, `[+4..7]` item. **Zen** (type `0x1CF`, 14/15) takes 9 bytes: the amount is 24 bits, `[+5]` `[+6]` `[+8]` big endian, `[+4]` `CF` and `[+7]` `80` give the type | code `0x419f90`, `0x4b58a0` |
+| `C2 21` items gone | `[4]` count, then 2 byte item ids BE from `[5]` | code (dispatcher) |
+| `C1 22` pick up result | `[3]` `FF`: nothing picked up. `FE`: zen, `[4..7]` the new money total, **big endian**. Anything else: inventory slot, `[4..7]` item, placed there over what the slot holds (a grown stack keeps its slot). Ends the wait after `22` (one pick up at a time) | code `0x41a0b0` |
+| `C1 23` drop result | `[3]` 0: refused, the held item goes back where it was. Otherwise dropped: `[4]` the slot it came from is cleared (below 12 an equipment slot) | code `0x41a3a0` |
+| `C3 24` move result | must be encrypted. `[3]` `FF`: refused, the held item goes back (`0x48e650`). Otherwise `[3]` window: 0 inventory (8 x 8, slots as in `F3 10`), 1 trade (8 x 4), 2 warehouse (8 x 15), 3 chaos machine (8 x 4), `[4]` slot, `[5..8]` item placed there. Ends the wait after `24` (one move at a time) | code `0x41a680` |
+| `C1 25` look change | `[3..4]` cid, `[5..8]` the item, but `[6]` is slot << 4 \| level. `[5]` `FF`: the slot is empty. Slots 0..8 (right hand, left hand, helm, armor, pants, gloves, boots, wings, pet), the others are ignored. The low nibble is the model level for the right hand and the glow index (as in [Equipment look](#equipment-look)) for slots 1..6. `[8] & 0x3F` excellent | code `0x416060` |
+| `C1 26` life | `[3]` `FF`: life, `FE`: max life, value `[4..5]` **big endian**. `FD`: unlocks item use (see [Items](#items)). Other values: an inventory slot (12..75), the count (durability) of the item there goes down by one, at 0 the item is removed. Doesn't unlock item use | code `0x41bcd0` |
 | `C1 27` mana | `[3]` `FF`: mana, `FE`: max mana, value `[4..5]` big endian. Other values: mana from `[4..5]` and the item count as in `26` | code `0x41bfc0` (asm) |
+| `C1 28` item deleted | `[3]` slot (`FF`: none, equipment slots too), `[4]` not 0: unlocks item use | code (dispatcher), `0x48e0d0` |
+| `C1 2A` durability | `[3]` slot (below 12 equipment), `[4]` durability, `[5]` not 0: unlocks item use | code `0x41c3b0` |
 | `C1 A0` quest states | `[3]` byte count, then the state bytes (see [Quest window](#quest-window)). The client zeroes its 50 state bytes and copies `[3]` bytes, the count isn't checked against 50. Also sets the quest class from the hero's class (low 3 bits class, bit 3 second class): the only place it is set | code `0x420320`, `0x401160` |
 | `C1 A1` quest dialog | `[3]` quest index, `[4]` state byte, stored as state byte `quest >> 2`. Closes the other windows and opens the quest window with the text for the quest's state. Doesn't check which NPC is being talked to | code `0x420350`, `0x4018d0` |
 | `C1 A2` quest state result | `[3]` quest index, `[4]` result: 0 does what `A1` does with `[5]` as the state byte, anything else is ignored | code `0x420380` |
@@ -161,6 +170,10 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C3 1C` move through a gate | 6 bytes: `[3]` gate number, `[4]` `[5]` 0. Sent while the hero stands in the area of an entrance gate (`Gate.bmd` kind 1) of its map and its level is at least the gate's (magic gladiators: two thirds of it, class number 3), else the client shows the level message. At most every 3 s and only one until a `1C` answer arrives. Gates 45..49, 55, 56 also need the hero not riding a Horn of Uniria / Dinorant (items `0x1A2` / `0x1A3`), 62..65 a check not reviewed | code `0x474030` |
 | `C3 1D` area skill hits | `[3]` skill list index, `[4]` x `[5]` y, `[6]` serial, `[7]` count, then target cids. **Has a byte between y and count** that OpenMU's 0.75 layout doesn't | code `0x442610` |
 | `C1 00` chat | name + message, not reviewed yet: send a chat line and check the log | - |
+| `C3 22` pick up | `[3..4]` item id BE. Sent when the hero is within 150 units of the item (1.5 tiles from the tile centre, the client walks there first) and the item fits in the grid (zen always), one at a time until `22` answers | code `0x4650a0` |
+| `C3 23` drop | `[3]` x `[4]` y (the tile under the mouse), `[5]` the slot the held item came from | code `0x497760` |
+| `C3 24` move | 11 bytes: `[3]` source window, `[4]` source slot, `[5..8]` the item as the client has it, `[9]` target window, `[10]` target slot. Windows and slots as in the result. One at a time until `24` answers. The client also sends it on its own: arrows / bolts from the grid into a hand when a bow / crossbow has none (`0x463d60`), the left hand item to the right hand (`0x474ac0`) | code `0x422db0` |
+| `C3 26` use item | `[3]` inventory slot, `[4]` target slot (0 for potions). Sent on a right click on 14/0..6 (apple, potions), 14/8, 14/9, 14/20, group 15 (scrolls), 12/7..14, 12/16..19, and by the potion hotkeys. Locks item use until the server unlocks it (see [Items](#items)) | code `0x4916f0` |
 
 ## Terrain
 
@@ -232,6 +245,95 @@ World58 / World59 (247): the slots above 159 aren't loaded from the map folder a
 clients draw some objects, water, sky, fog and effects with code of their own per map, this client's per map code
 only knows maps 0..10. Monster models are loaded per monster type in the client (`Data2\Monster\`, `0x4bc4d0`,
 not reviewed), so a ported map can only show monster types this client has. Map numbers above 10 are not tried.
+
+## Items
+
+**Types**: `group * 32 + index`, 0..511, 16 groups.
+
+**`Data\Local\item.bmd`** (files, code `0x45a270` reads the fields): 512 records of 56 bytes xor `FC CF AB`, then
+4 bytes (a checksum, not checked). In memory as they are, pointer at `0x7c85330`. Copied to `data/item.bmd`.
+
+| offset | field |
+|---|---|
+| 0..29 | name (some entries in Korean, EUC-KR) |
+| 30 | two-handed |
+| 31 | level (drop level) |
+| 32, 33 | width, height in the grid |
+| 34, 35 | damage min, max |
+| 36 | defense rate (shields) |
+| 37 | defense |
+| 38 | magic defense |
+| 39 | attack speed (gloves: the bonus) |
+| 40 | walk speed (boots) |
+| 41 | durability (potions, arrows: the stack size shown) |
+| 42 | magic durability, staffs |
+| 43, 44, 45 | strength, agility, energy requirement base |
+| 46 | level requirement |
+| 47 | value (potions: the heal value) |
+| 48..51 | classes dark wizard, dark knight, elf, magic gladiator: 0 no, 1 yes, 2 second class only |
+| 52..55 | resistances ice, poison, lightning, fire (rings, pendants) |
+
+**Item bytes**, 4 in every packet (code `0x459b80`, `0x45a270`):
+
+| byte | bits |
+|---|---|
+| 0 | type & 0xFF |
+| 1 | bit 7 skill, bits 3..6 level (0..15), bit 2 luck, bits 0..1 option bits 0..1 |
+| 2 | durability (count for potions) |
+| 3 | bits 0..5 excellent options, bit 6 option bit 2, bit 7 type bit 8 |
+
+The option is 0..7: + 4 damage per step on weapons, + 5 defense rate on shields, + 4 defense on armor, 1% life
+regeneration on rings / pendants (usual meanings, the client adds 5 * option to the strength requirement). Excellent
+bits: `0x45a270` adds one tooltip line per bit, a set for armor, shields and wings, another for weapons and
+pendants (option ids `0x42..0x4f`, their texts not looked up).
+
+**Slots**: 0 right hand, 1 left hand, 2 helm, 3 armor, 4 pants, 5 gloves, 6 boots, 7 wings, 8 pet, 9 pendant,
+10 and 11 rings, 12..75 the grid. Hero equipment at hero (`0x7c0dd24`) `+0x224`, grid at `0x7da9ad8`, both
+`0x44` bytes per item: `+0x00` type (2 bytes, `FFFF` empty), `+0x04` byte 1, `+0x08` slot class, `+0x1a` durability,
+`+0x1b` byte 3, `+0x1c..+0x22` requirements (code).
+
+**Slot class** of a type (`0x45a270`, item `+0x08`): groups 0..5 right hand, except bows and the bolt (4/0..4/7)
+and 4/17 left hand (arrows 4/15 and crossbows go right); group 6 (shields) left hand; groups 7..11 slots 2..6;
+12/0..6 wings; 13/0..7 pet; 13/8..11 ring; 13/12..31 pendant; anything else can't be worn.
+
+**What the equipment window checks** before it sends `24` (`0x48eec0`, code, the second half not read in full):
+the class byte of the item for the hero's class is not 0, a magic gladiator may also wear what dark wizards or dark
+knights may; the target slot is the item's slot class, rings go in either ring slot, a right hand weapon of width 1
+also goes in the left hand; no width 2 weapon (not a shield) in the left hand while the right hand holds something
+but arrows / bolts, nothing in the left hand while the right hand item is width 2. Strength, agility and level
+requirements are not checked there (the tooltip shows them red), the server has to.
+
+**Requirements** as the client computes them (`0x45a270`, code), item level L, drop level D (D + 25 for an item
+with excellent options), base values from `item.bmd`, 0 means none:
+
+- strength: `(D + 3L) * str * 3 / 100 + 20`, agility the same with agi. Types below `0x180` but arrows / bolts:
+  + 5 * option on strength.
+- energy: `(D + 3L) * ene * 4 / 10 + 20`; Summon Orb (12/11) by level: 30, 60, 90, 130, 170, 210, 300.
+- level: `level + 4L`, + 20 for excellent items; Ring of Transform (13/10): 20 below level 3, 50 from level 3.
+
+Damage and defense grow by 3 per level up to 9, 4 for level 10 and 5 for each level above (same function).
+
+**Equipment look**, 10 bytes in `12` `[+5..14]` and `F3 00` `[+16..25]` (`0x43f6f0`, code):
+
+| byte | |
+|---|---|
+| 0 | right hand type (0..254), `FF` empty |
+| 1 | left hand type, `FF` empty |
+| 2 | helm index (high nibble), armor index (low nibble) |
+| 3 | pants (high), gloves (low) |
+| 4 | boots (high nibble), bits 2..3 wings 12/0..2 (3 none), bits 0..1 pet 13/0..2 (3 none or Dinorant) |
+| 5..7 | 24 bits big endian, 3 bits per item: right hand (bits 0..2), left hand, helm, armor, pants, gloves, boots (bits 18..20) |
+| 8 | bit 7 helm index bit 4, bit 6 armor, bit 5 pants, bit 4 gloves, bit 3 boots (index 31 = empty), bit 2 Dinorant (13/3) when the pet bits are 3 |
+| 9 | excellent: bit 7 helm, 6 armor, 5 pants, 4 gloves, 3 boots, 2 right hand, 1 left hand |
+
+The 3 bit level is a glow index, `0x43f680` maps it to a model level: 0, 3, 5, 7, 8, 9, 10, 11.
+
+**Ground items**: 1000 of `0x1d4` bytes at `0x7d1fa88`, their own ids (not object cids).
+
+**Item use lock** (`0x57c7140`): every `26` request sets it to 10, nothing counts it down. While it is set the
+client sends no `26` and the equipment window takes no clicks. Unlocked by `26 FD`, `28` with `[4]` not 0, `2A`
+with `[5]` not 0, `29` (not reviewed) and the character select reset. The usual answer to a potion: `2A` slot,
+count left, 1, or `28` slot, 1 when it was the last one.
 
 ## Client limits
 

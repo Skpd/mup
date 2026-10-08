@@ -11,7 +11,7 @@ Packet codes are hex, details in `docs/protocol-097.md`. Where a code's meaning 
 | M0 protocol fixes, housekeeping | done |
 | M1 persistence, character select flow | done |
 | M2 world: maps, gates, monsters | done |
-| M3 items | todo |
+| M3 items | done |
 | M4 combat and progression | todo |
 | M5 NPCs, shops, warehouse, chaos machine | todo |
 | M6 social: whisper, party, trade | todo |
@@ -155,6 +155,82 @@ Done:
 
 Done when: kill a monster, pick up its drop, equip it, another client sees the new look, a potion heals.
 
+Steps (each leaves something that runs and is tested):
+
+0. Reverse engineering into the doc first (`tools/extract.sh`):
+   - item bytes: `0x48d940` decodes an item (also called for `32`, `39`, `F3 14`): entry size, type / level / skill
+     / luck / option / excellent / durability bits.
+   - `F3 10` (`0x414310`, `[5]` count, entries from `[6]`): slot numbering, equipment slots, where the 8 x 8 grid
+     starts.
+   - server handlers `20` (`0x419f90`), `21` (inline), `22` (`0x41a0b0`), `23` (`0x41a3a0`), `24` (`0x41a680`),
+     `25` (`0x416060`), `26` / `27` item counts, `28` (`0x48e0d0`). Do ground items share the 400 objects' cids?
+   - client senders `22` (`0x4650a0`), `23` (`0x497760`), `24` (`0x422db0`, `0x474ac0`), the item use `26` sender
+     (not in the sender index: inventory right click).
+   - equipment look: the 10 bytes in `12` `[+5..14]` / `F3 00` `[+16..25]` (`0x4164b0`, `0x4124b0`), replacing the
+     guesses in `appearance.py`.
+   - requirements: the tooltip's formula (`0x487030`), so the server refuses what the client shows red. Potion
+     stack limit if the client checks one.
+   - `item.bmd`: 28676 bytes = 512 records of 56 bytes + 4, xor `FC CF AB`, 16 groups x 32 (type
+     `group * 32 + index`, Horn of Uniria `0x1A2` = 13/2). Record field offsets.
+1. Item data: `data/item.bmd` from the client, loader in `mup/server/item.py` (`ItemDef`). The server's `Item.txt`
+   in `~/projects/client/Data/Item` is a later version (512 per group, DL), use it only for values the client
+   doesn't have, where `index < 32` and the name matches. Potion heal values: small table, usual or mup's choice.
+2. Model and storage: `ItemDef` (static) and `Item` (serial, type, level, durability, options) instead of
+   `mup/model/item.py`'s mix. `Player.inventory` slot -> `Item` (equipment and grid). Migration rebuilding the empty
+   `items` table with item columns, items saved with the character in one transaction, serials from a counter. One
+   item codec (a `Packet` field type) for every packet carrying items.
+3. Inventory rules, `mup/server/inventory.py`, no packets: grid occupancy by item size, free spot, equipment slot
+   per item group, class flags, requirements (client formula), two-handed vs shield, bow / arrows, move validation.
+4. Packets: real `F3 10` on join, `24` move / equip with the C3 result, `25` new look to viewers, real
+   `appearance.equipment(p)` (fixes `12` and the character list).
+5. Ground items: an item grid per map in `world.py`, `view.py` sends `20` / `21` as they come and go, expiry and
+   owner priority (killer / dropper first for a few seconds, mup's choice) in the tick. `23` drop, `22` pick up
+   (items and zen, zen into `Player.zen`).
+6. Drops: on kill (`combat.hit_monster`) roll nothing / zen / item with `drop_rate`. Items from `item.bmd` by level
+   near the monster's (usual 0.97 rule), potions by monster level, small option chances. `[world] item_drops` file
+   for fixed drops per monster, the test config uses it. The later server's `ItemDrop.txt` is mostly post 0.97
+   items, not used.
+7. Potions: `26` use, heal, `26 FF` / `27 FF`, count down or delete, the potion delay the client's `FD` timer
+   implies.
+8. Test (raw offsets): empty `F3 10`, A kills a fixed drop monster, A and B see `20`, A picks up (`22`), both get
+   `21`, A equips (C3 `24`), B gets `25`, refused moves (wrong slot, requirement, overlap), A drops and B picks up
+   after the owner time, zen pickup, a potion heals, after relog `F3 10`, `F3 03` money and the look in the
+   character list are kept. Then the real client.
+
+Not in M3: durability loss (`2A`) and repair, jewels, shops and warehouse (M5), item stats in damage (M4), PK
+item drop (M7).
+
+Done:
+- Doc: [Items](protocol-097.md#items) (item bytes, `item.bmd`, slots, slot classes, requirements, equipment look,
+  item use lock) and the packets `F3 10`, `20`..`28`, `2A` both ways, all from code. 4 bytes per item, the client
+  places a grid item by its top left slot. Zen on the ground has a 9 byte entry in `20`. `22` / `23` / `24` / `26`
+  requests are C3.
+- `data/item.bmd` (the client's) and `data/Item.txt` (the later server's: skill, options, drops) in
+  `mup/server/item.py`, `ItemInfo` / `Item` / `GroundItem` in `mup/model/item.py`. `Player.inventory` is slot ->
+  `Item`. Migration 2 rebuilds `items` with the item fields, items are saved with the character (`INSERT OR
+  REPLACE` by serial, so an item that changed hands moves to its new owner), serials from the highest stored.
+- `inventory.py`: grid fit, free slot (row by row), wear rules as the client checks them (slot class, rings both
+  slots, one-handed weapons in the left hand for every class, class byte, magic gladiators as wizards or knights,
+  no two-handed weapon sharing the hands but with arrows / bolts) plus the requirements the client doesn't check.
+  Only the inventory window (0), trade / warehouse / chaos moves are refused. `25` to the viewers for slots 0..8.
+- Ground items (`ground.py`): ids 0..999, an item grid per map in `world.py`, in `c.view` like players and monsters
+  (`20` / `21`, `21` before a map change). 60 s on the ground, the killer alone may pick up for 10 s, player drops
+  have no owner, pick up within 3 tiles, a drop farther than 3 tiles or on a wall lands on the player's tile. Zen
+  goes into the money (`22 FE`, at most 2 000 000 000). All mup's choices.
+- Drops (`loot.py`): an item when `rand(ItemRate) < 10 * drop_rate`, else zen when `rand(MoneyRate) < 10`
+  (Monster.txt columns, the usual servers' shape with mup's numbers): 5..9% items, 35..46% zen on the real data.
+  Items with the drop flag and a drop level up to 20 below the monster's, one item level per 10 monster levels
+  up to `MaxItemLevel`, skill 15%, luck 10%, option 1 15% / 2 5%. Zen `level² / 2 + 5 level` +-25%. Fixed drops per
+  monster type from `item_drops` (every line rolls on its own). Potions are as rare as any other item for now.
+- Potions (`inventory.use`): healing `value * 10 - 2 * level` + 10 / 20 / 30 / 40% of max life, mana 20 / 30 / 40%
+  (the later WebZen servers' formulas), then `2A` with the count or `28` for the last one, both unlock item use;
+  other items only get the unlock (`26 FD`). No stacking on pick up yet.
+- Test: drops seen by both players with the fall flag and the zen entry, the owner refusing A, pick up into slots
+  12 / 13, zen, refused moves (overlap, a potion as helm, a wizard's strength), wearing the sword with `25` to the
+  other player, a player drop picked up by the other, the look in the char list and in `12` after relog and
+  restart, the inventory and money after relog and restart, a potion healing with `28` after it.
+- Real client: looked fine.
+
 ## M4 combat and progression
 
 - Damage formulas per class, stats and weapon, defense, miss, critical / excellent rolls, attack range and speed checks.
@@ -258,7 +334,6 @@ in Lorencia.
 
 ## Reverse engineering backlog
 
-- Item byte layout (M3).
 - Unknown server packets: `01`, `0B`, `0C`, `1A`, `71`, `F1 04` / `05` / `12`, `F3 07` / `08` / `13` / `14` /
   `20` / `22` / `23` / `30` / `40`.
 - Client packets missed by the sender index (whisper and others), and `97`, `98`, `A2`, `C1`.

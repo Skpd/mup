@@ -25,6 +25,11 @@ from mup.packet.server_packet.action import Action as Action097
 from mup.packet.server_packet.map_move import MapMove as MapMove097
 from mup.packet.server_packet.respawn import Respawn as Respawn097
 from mup.packet.server_packet.life import Life as Life097, Mana as Mana097
+from mup.packet.server_packet.ground_item import (GroundItems as GroundItems097, GroundZen as GroundZen097,
+                                                  ItemsGone as ItemsGone097)
+from mup.packet.server_packet.item import (PickUpResult as PickUpResult097, DropResult as DropResult097,
+                                           MoveItemResult as MoveItemResult097, LookChange as LookChange097,
+                                           ItemDeleted as ItemDeleted097, Durability as Durability097)
 
 
 SServerList = ServerList097
@@ -55,3 +60,12 @@ SMapMove = MapMove097
 SRespawn = Respawn097
 SLife = Life097
 SMana = Mana097
+SGroundItems = GroundItems097
+SGroundZen = GroundZen097
+SItemsGone = ItemsGone097
+SPickUpResult = PickUpResult097
+SDropResult = DropResult097
+SMoveItemResult = MoveItemResult097
+SLookChange = LookChange097
+SItemDeleted = ItemDeleted097
+SDurability = Durability097

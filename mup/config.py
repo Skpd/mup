@@ -22,6 +22,8 @@ class Config:
     autosave_interval: float = 300.0  # seconds between saves of the characters in game
     monster_info: str = 'data/Monster.txt'  # monster types, server file of a later version
     monster_spawns: str = 'data/MonsterSetBase.txt'  # where they appear, only maps 0..10 are used
+    item_info: str = 'data/Item.txt'  # which items drop, have a skill or options, server file of a later version
+    item_drops: str = ''  # fixed drops per monster type on top of the random ones, none when empty
     auto_create_accounts: bool = True  # the first login with an unknown account name creates it
     personal_code: str = '1111111'  # personal code of auto created accounts, deleting a character asks for it
     log_level: str = 'INFO'
