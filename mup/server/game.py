@@ -8,7 +8,8 @@ from mup.packet.server import SServerJoin, SStats, SMeetPlayer, SSkillList, SMov
 from mup.repository import database
 from mup.repository.account import AccountRepository
 from mup.repository.character import CharacterRepository
-from mup.server import ai, combat, effect, gate, ground, inventory, item, loot, monster, skill, stats, summon, view
+from mup.server import (ai, chaos, combat, effect, gate, ground, inventory, item, loot, monster, npc, shop, skill,
+                        stats, summon, view)
 from mup.server.base import ServerBase
 from mup.server.character import respawn_gate
 from mup.server.world import load_maps
@@ -39,6 +40,8 @@ class GameServer(ServerBase):
         self.item_info = item.load_info(ITEM_PATH, config.item_info)
         self.fixed_drops = loot.load_fixed(config.item_drops, self.item_info)
         self.skills = skill.load(SKILL_PATH, config.skill_info)
+        self.shops = shop.load(config.shops, self.item_info)  # NPC type -> Shop
+        self.mixes = chaos.load(config.mixes)
         self.ground = ground.Ground()
 
         self.db = database.connect(config.db_path)
@@ -61,10 +64,13 @@ class GameServer(ServerBase):
                 '{} {}'.format(self.maps[m.map_id].name, m.info.name) for m in missing)))
             for m in missing:
                 del self.monsters[m.cid]
-        logger.info('%s monsters on %s maps', len(self.monsters), len({m.map_id for m in self.monsters.values()}))
+        npcs = sum(m.npc for m in self.monsters.values())
+        logger.info('%s monsters and %s NPCs on %s maps', len(self.monsters) - npcs, npcs,
+                    len({m.map_id for m in self.monsters.values()}))
         # summons take the monster ids left
         self.summon_cids = deque(range(max(self.monsters, default=0) + 1, self.first_player_cid))
-        logger.info('%s item types, fixed drops for %s monster types', len(self.item_info), len(self.fixed_drops))
+        logger.info('%s item types, fixed drops for %s monster types, %s shops', len(self.item_info),
+                    len(self.fixed_drops), len(self.shops))
 
         self.next_save = now + config.autosave_interval
         self.task = None
@@ -121,6 +127,7 @@ class GameServer(ServerBase):
 
     def _player_tick(self, c, now):
         p = c.player
+        npc.check(self, c)
         if p.respawn_at is not None:
             if now >= p.respawn_at:
                 combat.respawn(self, c)
@@ -160,6 +167,7 @@ class GameServer(ServerBase):
 
         p.values = stats.compute(p)
         p.life, p.mana = min(p.life, p.max_life), min(p.mana, p.max_mana)
+        chaos.return_items(self, c, notify=False)  # left in the chaos machine without room, the inventory goes below
         skill.update_weapon_skills(self, c, notify=False)  # the list goes out below
         # no weather packet (0x0F): this client ignores what other versions send on join
         c.write(SStats.of(p))
@@ -173,6 +181,7 @@ class GameServer(ServerBase):
 
     def leave_world(self, c):
         """Saves the character of connection c and takes it out of the game, the account stays logged in."""
+        npc.close(self, c, leaving=True)
         effect.clear(self, c)
         summon.dismiss(self, c)
         self.save(c)
@@ -196,6 +205,7 @@ class GameServer(ServerBase):
         the client clears its objects on it, so everything in view is sent again.
         """
         p = c.player
+        npc.close(self, c, notify=True)  # F3 04 closes the client's NPC windows, 1C its vault
         if map_id != p.map_id:
             summon.dismiss(self, c)
         view.forget(self, c)
@@ -215,9 +225,10 @@ class GameServer(ServerBase):
         return any(c.acc is not None and c.acc.id == account_id for c in self.connections.values())
 
     def save(self, c):
-        """Writes the character of connection c. A failed write is logged, the game goes on."""
+        """Writes the character of connection c, with the account's vault when it was opened. A failed write is
+        logged, the game goes on."""
         try:
-            self.characters.save(c.player)
+            self.characters.save(c.player, c.warehouse)
         except Exception:
             logger.exception('Failed to save %s', c.player.name)
 

@@ -34,6 +34,8 @@ class Spawn:
     ys: range
     leash: int  # how far from its spawn spot a monster chases before it returns
     count: int = 1
+    npc: bool = False  # NPCs and traps: they stand at their spot, nobody hits them
+    direction: int = 0  # an NPC's, the client's direction byte
 
 
 @dataclass(eq=False)
@@ -64,6 +66,15 @@ class Monster:
     @property
     def type_id(self):
         return self.info.number
+
+    @property
+    def npc(self):
+        return self.spawn.npc
+
+    @property
+    def attackable(self):
+        """Players and their summons may hit it: not an NPC, a trap or a summon."""
+        return self.owner is None and not self.spawn.npc
 
     @property
     def max_life(self):

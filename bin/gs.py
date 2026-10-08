@@ -21,6 +21,8 @@ from mup.server.handler.magic import magic_attack_handler, aoe_magic_handler, ar
 from mup.server.handler.map_ready import map_ready_handler
 from mup.server.handler.move import move_handler
 from mup.server.handler.move_gate import move_gate_handler
+from mup.server.handler.npc import (talk_handler, close_window_handler, buy_handler, sell_handler, repair_handler,
+                                    warehouse_money_handler, warehouse_close_handler, mix_handler, chaos_close_handler)
 from mup.server.handler.ping import ping_handler
 from mup.server.protocol import BaseProtocol
 
@@ -40,6 +42,15 @@ def create_gs(loop, cfg):
     gs.add_handler(0x23, None, drop_item_handler)
     gs.add_handler(0x24, None, move_item_handler)
     gs.add_handler(0x26, None, use_item_handler)
+    gs.add_handler(0x30, None, talk_handler)
+    gs.add_handler(0x31, None, close_window_handler)
+    gs.add_handler(0x32, None, buy_handler)
+    gs.add_handler(0x33, None, sell_handler)
+    gs.add_handler(0x34, None, repair_handler)
+    gs.add_handler(0x81, None, warehouse_money_handler)
+    gs.add_handler(0x82, None, warehouse_close_handler)
+    gs.add_handler(0x86, None, mix_handler)
+    gs.add_handler(0x87, None, chaos_close_handler)
     gs.add_handler(0x00, None, chat_handler)
     gs.add_handler(0x0E, 0x00, ping_handler)
     gs.add_handler(0xF3, 0x00, char_list_handler)

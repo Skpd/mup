@@ -1,0 +1,9 @@
+// Chaos machine mixes (mup.server.chaos): success rate %, zen, % more when the item mixed has luck. These are the
+// values the client shows (0x4a7760), -1 its own: the chaos weapon mix's rate is the items' prices / 20000 (at most
+// 100) and its zen 10000 per %. The Devil Square invitation comes with its event
+//Mix          Rate   Zen        Luck
+chaos          -1     -1         0
+plus10         50     2000000    25
+plus11         45     4000000    25
+dinorant       70     250000     0
+end

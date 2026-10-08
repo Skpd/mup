@@ -104,6 +104,30 @@ MIGRATIONS = [
         + CASE WHEN level > 256 THEN 1000 * (level - 247) * (level - 256) * (level - 256) ELSE 0 END;
     ALTER TABLE characters ADD COLUMN key_settings BLOB;
     """,
+    # roadmap M5: items in the chaos machine are kept with their character (owner 'chaos', slot 0..31), the CHECK
+    # can't be altered in SQLite, the table is rebuilt
+    """
+    CREATE TABLE items_new (
+        id INTEGER PRIMARY KEY,
+        serial INTEGER NOT NULL UNIQUE,
+        owner TEXT NOT NULL CHECK (owner IN ('inventory', 'warehouse', 'chaos')),
+        character_id INTEGER REFERENCES characters (id) ON DELETE CASCADE,
+        account_id INTEGER REFERENCES accounts (id),
+        slot INTEGER NOT NULL,
+        type INTEGER NOT NULL,
+        level INTEGER NOT NULL DEFAULT 0,
+        durability INTEGER NOT NULL DEFAULT 0,
+        skill INTEGER NOT NULL DEFAULT 0,
+        luck INTEGER NOT NULL DEFAULT 0,
+        option INTEGER NOT NULL DEFAULT 0,
+        excellent INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO items_new SELECT * FROM items;
+    DROP TABLE items;
+    ALTER TABLE items_new RENAME TO items;
+    CREATE INDEX items_character ON items (character_id);
+    CREATE INDEX items_account ON items (account_id);
+    """,
 ]
 
 

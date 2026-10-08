@@ -7,11 +7,12 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 
 - `bin/cs.py` connect server (port 44405), `bin/gs.py` game server (55901). Run from the repo root, `data/`
   (crypto keys, the client's terrains, `Gate.bmd`, `item.bmd` and `skill.bmd`, the server's `Monster.txt` /
-  `MonsterSetBase.txt` / `Item.txt` / `Skill.txt`), `config.ini` and the database are opened with relative paths.
+  `MonsterSetBase.txt` / `Item.txt` / `Skill.txt` and `shop/`, mup's `ChaosMix.txt`), `config.ini` and the database
+  are opened with relative paths.
   `bin/account.py`: accounts (create, password, personal code, ban, GM).
 - `config.ini` (or the file in `MU_CONFIG`), read by `mup/config.py`: ports, advertised GS host, exp / drop rates,
-  database file and autosave, monster, item and skill data files, fixed drops, account auto creation, log level,
-  packet logging.
+  database file and autosave, monster, item, skill, shop and mix data files, fixed drops, account auto creation, log
+  level, packet logging.
 - `mup/packet/`: `base.py` has `Base(bytearray)` (type, size, head, sub) and the declarative `Packet`: `code`, `size`,
   `fields` as `(offset, name, type[, default])`, `entry` for lists. Field types carry the byte order (`u16` LE,
   `u16be`, `cid` BE). `Packet(name=value)` builds, `Packet(data)` parses into attributes; list packets have an
@@ -24,9 +25,11 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   ammunition, pace, death, respawn, regen), `stats.py` (what class, stats and items give, the client's formulas,
   `F3 06`), `experience.py` (kill exp, level up, death loss), `skill.py` (skill data, the list, learning, weapon
   skills), `casting.py` (skills on targets and areas, `1D` hits, buffs, teleport), `effect.py` (poison, ice, buffs,
-  `1B`), `summon.py`, `item.py` (item data, wear slots, requirements, durability), `inventory.py` (grid, what may be
-  worn, moves, potions, scrolls), `ground.py` (items on the ground, drop, pick up), `loot.py` (monster drops),
-  `command.py` (GM commands in chat), `connect.py`,
+  `1B`), `summon.py`, `item.py` (item data, wear slots, requirements, durability, wear), `inventory.py` (grids,
+  what may be worn, moves between windows, potions, scrolls), `ground.py` (items on the ground, drop, pick up),
+  `loot.py` (monster drops), `npc.py` (NPC windows, talking), `shop.py` (shops, the client's prices, buy, sell,
+  repair), `warehouse.py`, `chaos.py` (chaos machine mixes), `jewel.py`, `command.py` (GM commands in chat),
+  `connect.py`,
   `handler/*` (one per packet, registered in `bin/gs.py` / `bin/cs.py`), `character.py` (creation rules, start
   and respawn gates). Game time is `GameServer.now`, the tick passes it on.
 - `mup/model/` dataclasses. `mup/repository/`: SQLite storage (`database.py` schema migrations, account and
@@ -52,9 +55,9 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   logging on, its own monster and drop files), plays two clients through login, character creation, walking, chat,
   combat, magic, drops, picking up, wearing and dropping items, a potion, disconnect, relog, GM commands, level up
   points, skills (scrolls, area hits, poison, teleport, weapon skills, an elf's buff, arrows, summons), monsters
-  chasing and killing, respawn and a gate, one function per area. Run it after every change and extend
-  it with every feature. It checks raw offsets from the doc, never the packet definitions, so a wrong definition
-  fails it.
+  chasing and killing, respawn and a gate, NPCs (shops, wear and repair, the vault across a restart, a jewel, a
+  mix, a trap), one function per area. Run it after every change and extend it with every feature. It checks raw
+  offsets from the doc, never the packet definitions, so a wrong definition fails it.
 - The real client is the final check: ask the user to try it and paste the log.
 
 ## Protocol rules

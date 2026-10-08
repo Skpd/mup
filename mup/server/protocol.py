@@ -41,6 +41,9 @@ class BaseProtocol(Protocol):
         self.teleport_at = 0.0  # the next teleport is allowed then
         self.left = None  # the character it logged out of
         self.summon = None  # the player's summoned monster, mup.server.summon
+        self.window = None  # the NPC window open, mup.server.npc.Window
+        self.warehouse = None  # the account's vault once opened, saved with the character (mup.server.warehouse)
+        self.stale_box = False  # the client may still show items in its chaos machine box, mup.server.chaos
 
     @property
     def tag(self):

@@ -32,7 +32,12 @@ from mup.packet.server_packet.ground_item import (GroundItems as GroundItems097,
                                                   ItemsGone as ItemsGone097)
 from mup.packet.server_packet.item import (PickUpResult as PickUpResult097, DropResult as DropResult097,
                                            MoveItemResult as MoveItemResult097, LookChange as LookChange097,
-                                           ItemDeleted as ItemDeleted097, Durability as Durability097)
+                                           ItemDeleted as ItemDeleted097, Durability as Durability097,
+                                           ItemChanged as ItemChanged097)
+from mup.packet.server_packet.npc import (Talk as Talk097, ItemList as ItemList097, BuyResult as BuyResult097,
+                                          SellResult as SellResult097, RepairResult as RepairResult097,
+                                          WarehouseMoney as WarehouseMoney097, WarehouseClosed as WarehouseClosed097,
+                                          MixResult as MixResult097, ChaosClosed as ChaosClosed097)
 
 
 SServerList = ServerList097
@@ -78,3 +83,13 @@ SMoveItemResult = MoveItemResult097
 SLookChange = LookChange097
 SItemDeleted = ItemDeleted097
 SDurability = Durability097
+SItemChanged = ItemChanged097
+STalk = Talk097
+SItemList = ItemList097
+SBuyResult = BuyResult097
+SSellResult = SellResult097
+SRepairResult = RepairResult097
+SWarehouseMoney = WarehouseMoney097
+SWarehouseClosed = WarehouseClosed097
+SMixResult = MixResult097
+SChaosClosed = ChaosClosed097

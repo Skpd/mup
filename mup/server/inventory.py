@@ -1,50 +1,70 @@
 """
 A player's inventory: the equipment slots and the 8 x 8 grid (mup.model.item), what may go where, moving and using
-items. Player.inventory maps the slot of an item (its top left tile in the grid) to the item.
+items. Player.inventory maps the slot of an item (its top left tile in the grid) to the item. The other windows
+items move between (the vault, the chaos machine's box) are grids of 8 columns too, slots from 0.
 """
 import logging
+from collections import namedtuple
 from mup.model.item import (GRID, GRID_SIZE, RIGHT_HAND, LEFT_HAND, RING, RING2, WINGS, PET, BOLT, ARROWS, GLOW,
                             glow)
-from mup.packet.server import SInventory, SLookChange, SLife, SMana, SItemDeleted, SDurability
+from mup.packet.server import (SInventory, SLookChange, SLife, SMana, SItemDeleted, SDurability, SMoveItemResult,
+                               STalk)
 from mup.server import item as items, skill, stats, view
 
 logger = logging.getLogger(__name__)
 
-GRID_END = GRID + GRID_SIZE * GRID_SIZE
+
+class Grid(namedtuple('Grid', 'start columns rows')):
+    """Slots start.. of a grid, row by row, an item's slot is its top left tile."""
+
+    @property
+    def end(self):
+        return self.start + self.columns * self.rows
+
+    def __contains__(self, slot):
+        return self.start <= slot < self.end
+
+
+INVENTORY = Grid(GRID, GRID_SIZE, GRID_SIZE)
+WAREHOUSE = Grid(0, 8, 15)  # the client's 120 slots, the shop's too
+CHAOS_BOX = Grid(0, 8, 4)
+GRID_END = INVENTORY.end
 SHOWN = range(PET + 1)  # equipment slots others see change (25), not the pendant and the rings
 AMMO = (BOLT, ARROWS)  # may share the hands with a two-handed bow / crossbow
 
 
-def tiles(slot, info):
-    """Grid tiles (0..63) an item of type info covers from slot, None when it sticks out of the grid."""
-    x, y = (slot - GRID) % GRID_SIZE, (slot - GRID) // GRID_SIZE
-    if x + info.width > GRID_SIZE or y + info.height > GRID_SIZE:
+def tiles(slot, info, grid=INVENTORY):
+    """Tiles (0..) of the grid an item of type info covers from slot, None when it sticks out of the grid."""
+    x, y = (slot - grid.start) % grid.columns, (slot - grid.start) // grid.columns
+    if x + info.width > grid.columns or y + info.height > grid.rows:
         return None
-    return {(y + dy) * GRID_SIZE + x + dx for dy in range(info.height) for dx in range(info.width)}
+    return {(y + dy) * grid.columns + x + dx for dy in range(info.height) for dx in range(info.width)}
 
 
-def taken(inventory, skip=None):
-    """Grid tiles covered by the items in the grid but the one in slot skip."""
+def taken(items_in, skip=None, grid=INVENTORY):
+    """Tiles covered by the items in the grid but the one in slot skip."""
     used = set()
-    for slot, item in inventory.items():
-        if slot >= GRID and slot != skip:
-            used |= tiles(slot, item.info)
+    for slot, item in items_in.items():
+        if slot in grid and slot != skip:
+            used |= tiles(slot, item.info, grid) or set()
     return used
 
 
-def fits(inventory, info, slot, skip=None):
+def fits(items_in, info, slot, skip=None, grid=INVENTORY):
     """An item of type info fits the grid from slot, the item in slot skip (the one moving) left out."""
-    if not GRID <= slot < GRID_END:
+    if slot not in grid:
         return False
-    t = tiles(slot, info)
-    return t is not None and t.isdisjoint(taken(inventory, skip))
+    t = tiles(slot, info, grid)
+    return t is not None and t.isdisjoint(taken(items_in, skip, grid))
 
 
-def free_slot(inventory, info):
-    """The first grid slot, row by row, an item of type info fits in. None when the grid is full."""
-    used = taken(inventory)
-    for slot in range(GRID, GRID_END):
-        t = tiles(slot, info)
+def free_slot(items_in, info, grid=INVENTORY, used=None):
+    """The first slot, row by row, an item of type info fits in. None when the grid is full. used: the tiles taken,
+    when the caller keeps them."""
+    if used is None:
+        used = taken(items_in, grid=grid)
+    for slot in range(grid.start, grid.end):
+        t = tiles(slot, info, grid)
         if t is not None and t.isdisjoint(used):
             return slot
     return None
@@ -91,26 +111,48 @@ def send(c):
     c.write(SInventory.of(c.player.inventory))
 
 
-def move(game, c, source, target):
-    """Moves the item in slot source of c's player to slot target. False when it may not go there."""
-    inv = c.player.inventory
-    item = inv.get(source)
-    if item is None or not 0 <= target < GRID_END:
+def windows(c):
+    """Window number of 24 -> (slot -> item, Grid) c's player may move items between now: the inventory (with the
+    equipment below its grid), the vault or the chaos machine's box while its window is open."""
+    p = c.player
+    found = {SMoveItemResult.INVENTORY: (p.inventory, INVENTORY)}
+    w = c.window
+    if w is not None and w.kind == STalk.WAREHOUSE and c.warehouse is not None:
+        found[SMoveItemResult.WAREHOUSE] = (c.warehouse.items, WAREHOUSE)
+    elif w is not None and w.kind == STalk.CHAOS_MACHINE:
+        found[SMoveItemResult.CHAOS_MACHINE] = (p.chaos_box, CHAOS_BOX)
+    return found
+
+
+def move(game, c, source, target, source_window=SMoveItemResult.INVENTORY, target_window=SMoveItemResult.INVENTORY):
+    """Moves the item in slot source of a window of c's player to slot target of a window (24 numbers). False when
+    it may not go there."""
+    open_windows = windows(c)
+    if source_window not in open_windows or target_window not in open_windows:
         return False
-    if source == target:
+    source_items, _ = open_windows[source_window]
+    target_items, grid = open_windows[target_window]
+    item = source_items.get(source)
+    if item is None:
+        return False
+    same = source_items is target_items
+    if same and source == target:
         return True
-    if target < GRID:
-        if target in inv or not can_wear(c.player, item, target, skip=source):
+    skip = source if same else None
+    wears = target_window == SMoveItemResult.INVENTORY and 0 <= target < GRID
+    if wears:
+        if target in target_items or not can_wear(c.player, item, target, skip=skip):
             return False
-    elif not fits(inv, item.info, target, skip=source):
+    elif not fits(target_items, item.info, target, skip=skip, grid=grid):
         return False
 
-    del inv[source]
-    inv[target] = item
-    for slot in (source, target):
-        if slot < GRID:
-            look_changed(game, c, slot)
-    if source < GRID or target < GRID:
+    del source_items[source]
+    target_items[target] = item
+    equipment = [slot for slot, window in ((source, source_window), (target, target_window))
+                 if window == SMoveItemResult.INVENTORY and slot < GRID]
+    for slot in equipment:
+        look_changed(game, c, slot)
+    if equipment:
         stats.update(c)
         skill.update_weapon_skills(game, c)
     return True

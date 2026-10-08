@@ -1,10 +1,11 @@
 """
 Monster behaviour, run by the game tick for the monsters near players: wander around the spawn spot, chase a player
-that comes within view range, attack it within attack range, return when it is lost or too far from home.
+that comes within view range, attack it within attack range, return when it is lost or too far from home. NPCs
+stand, traps hit who comes within their attack range.
 """
 import random
 from mup.packet.server import SAction
-from mup.server import combat, effect, summon, view
+from mup.server import combat, effect, monster, summon, view
 from mup.server.path import direction, find_path
 from mup.server.world import VIEW_RANGE, distance
 
@@ -30,6 +31,10 @@ def update(game, mob, now):
         return
     if mob.owner is not None:
         summon_update(game, mob, now)
+        return
+    if mob.npc:
+        if mob.type_id in monster.TRAPS:
+            trap_update(game, mob, now)
         return
     if mob.path and now >= mob.next_step_at:
         step(game, mob, now)
@@ -110,6 +115,16 @@ def attack(game, mob, c, now):
         o.write(action)
     mob.next_attack_at = now + mob.info.attack_speed / 1000
     combat.monster_attack(game, mob, c)
+
+
+def trap_update(game, mob, now):
+    """A trap hits the nearest player within its attack range, 0: standing on it (usual), at its attack speed."""
+    if now < mob.next_attack_at:
+        return
+    near = [c for c in game.maps[mob.map_id].players.near(mob.x, mob.y, mob.info.attack_range)
+            if can_target(game, mob, c)]
+    if near:
+        attack(game, mob, min(near, key=lambda c: distance(mob.x, mob.y, c.player.x, c.player.y)), now)
 
 
 def go_home(game, mob, now):

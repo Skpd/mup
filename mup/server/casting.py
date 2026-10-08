@@ -87,6 +87,7 @@ def hit(game, c, mob, info, rng=random):
         return False
     dmg, flags = skill_damage(p, info, rng)
     dmg += effect.value(c, effect.GREATER_DAMAGE)
+    combat.wear_weapon(c, mob, magic=bool(info.damage))
     combat.hit_monster(c, mob, max(dmg - mob.info.defense, combat.minimum_damage(p.level)), flags, magic=True)
     if not mob.dead:
         if info.number == effect.POISON:
@@ -115,7 +116,7 @@ def on_target(game, c, index, target_cid):
             applied = buff(game, c, target, info)
     elif info.number in NO_DAMAGE:
         logger.debug('%s: %s isn\'t used on a target', p.name, info.name)
-    elif mob is not None and not mob.dead and mob in c.view and mob.owner is None and in_reach(p, mob, info):
+    elif mob is not None and not mob.dead and mob in c.view and mob.attackable and in_reach(p, mob, info):
         summon.owner_attacks(c, mob)
         applied = hit(game, c, mob, info)
     else:
@@ -184,7 +185,7 @@ def area_hits(game, c, index, x, y, serial, cids):
         return
     for cid in cids:
         mob = game.monsters.get(cid)
-        if mob is None or mob.dead or mob not in c.view or mob.owner is not None or (serial, cid) in a.hit:
+        if mob is None or mob.dead or mob not in c.view or not mob.attackable or (serial, cid) in a.hit:
             continue
         if distance(mob.x, mob.y, x, y) > radius:
             continue

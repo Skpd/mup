@@ -1,7 +1,7 @@
 import logging
 from mup.packet.client import CPickUp, CDropItem, CMoveItem, CUseItem
 from mup.packet.server import SDropResult, SMoveItemResult
-from mup.server import ground, inventory
+from mup.server import ground, inventory, jewel
 from mup.server.protocol import BaseProtocol
 
 logger = logging.getLogger(__name__)
@@ -26,13 +26,13 @@ def move_item_handler(msg: CMoveItem, proto: BaseProtocol):
     p = proto.player
     if p is None:
         return
-    item = p.inventory.get(msg.source)
-    # todo trade, warehouse, chaos machine windows (roadmap M5, M6)
-    ok = (msg.source_window == msg.target_window == SMoveItemResult.INVENTORY and item is not None
-          and item.encode()[0] == msg.item[0] and item.encode()[3] >> 7 == msg.item[3] >> 7
-          and inventory.move(proto.server, proto, msg.source, msg.target))
+    # todo trade (roadmap M6)
+    source = inventory.windows(proto).get(msg.source_window)
+    item = source[0].get(msg.source) if source is not None else None
+    ok = (item is not None and item.encode()[0] == msg.item[0] and item.encode()[3] >> 7 == msg.item[3] >> 7
+          and inventory.move(proto.server, proto, msg.source, msg.target, msg.source_window, msg.target_window))
     if ok:
-        proto.write(SMoveItemResult(window=SMoveItemResult.INVENTORY, slot=msg.target, item=item.encode()))
+        proto.write(SMoveItemResult(window=msg.target_window, slot=msg.target, item=item.encode()))
     else:
         logger.debug('%s: move from %s %s to %s %s refused', p.name, msg.source_window, msg.source,
                      msg.target_window, msg.target)
@@ -42,4 +42,7 @@ def move_item_handler(msg: CMoveItem, proto: BaseProtocol):
 def use_item_handler(msg: CUseItem, proto: BaseProtocol):
     if proto.player is None:
         return
-    inventory.use(proto.server, proto, msg.slot)
+    if jewel.is_jewel(proto.player.inventory.get(msg.slot)):
+        jewel.apply(proto.server, proto, msg.slot, msg.target)
+    else:
+        inventory.use(proto.server, proto, msg.slot)

@@ -1,9 +1,9 @@
 import logging
 import random
-from mup.model.item import RIGHT_HAND, LEFT_HAND, ARROWS, BOLT
+from mup.model.item import RIGHT_HAND, LEFT_HAND, HELM, ARMOR, PANTS, GLOVES, BOOTS, ARROWS, BOLT
 from mup.model.monster import Monster
 from mup.packet.server import SDamage, SKill, SLife, SMana, SRespawn, SDurability, SItemDeleted
-from mup.server import effect, experience, ground, inventory, loot, monster, stats, summon, view
+from mup.server import effect, experience, ground, inventory, item as items, loot, monster, stats, summon, view
 from mup.server.character import respawn_gate
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,10 @@ MELEE_REACH = 3  # tiles, mup's choice: a step of lag over the client's reach
 BOW_REACH = 8
 ATTACK_INTERVAL = 0.4  # seconds per attack at speed 0, see paced()
 ATTACK_BURST = 4
+# wear an item takes before it loses a durability point (mup.server.item.wear): weapons by the defense of what they
+# hit, armor by the damage taken. The later WebZen servers' shape, mup's numbers
+WEAPON_WEAR, BOW_WEAR, STAFF_WEAR, ARMOR_WEAR = 564, 780, 1050, 69
+ARMOR_SLOTS = (LEFT_HAND, HELM, ARMOR, PANTS, GLOVES, BOOTS)  # one of them takes a hit, the left hand with a shield
 
 
 def hit_monster(proto, mob: Monster, dmg, flags=0, magic=False):
@@ -124,6 +128,54 @@ def use_ammunition(game, c, slot):
     stats.update(c)
 
 
+def worn_weapon(p, magic):
+    """The slot of the weapon a hit wears: the staff for a wizard's skill, else the bow / crossbow or the weapon in
+    hand (right first). None without one."""
+    right, left = p.inventory.get(RIGHT_HAND), p.inventory.get(LEFT_HAND)
+    if magic:
+        return RIGHT_HAND if right is not None and right.type in stats.STAFFS else None
+    if left is not None and left.type in stats.LEFT_BOWS:
+        return LEFT_HAND
+    for slot, item in ((RIGHT_HAND, right), (LEFT_HAND, left)):
+        if item is not None and item.type < stats.SHIELDS.start and item.type not in (BOLT, ARROWS):
+            return slot
+    return None
+
+
+def wear_weapon(c, mob, magic=False):
+    """c's player hit mob: its weapon wears by the monster's defense."""
+    p = c.player
+    slot = worn_weapon(p, magic)
+    if slot is None:
+        return
+    weapon = p.inventory[slot]
+    damage_min = weapon.info.damage_min
+    if not damage_min:
+        return
+    limit = STAFF_WEAR if magic else BOW_WEAR if weapon.info.group == 4 else WEAPON_WEAR
+    if items.wear(weapon, mob.info.defense * 2 // (damage_min + damage_min // 2), limit):
+        durability_lost(c, slot)
+
+
+def wear_armor(c, dmg, rng=random):
+    """c's player took a hit of dmg: a random piece of its armor (or its shield) wears by it."""
+    p = c.player
+    slot = rng.choice(ARMOR_SLOTS)
+    piece = p.inventory.get(slot)
+    if piece is None or slot == LEFT_HAND and piece.type not in stats.SHIELDS or not piece.info.defense:
+        return
+    if items.wear(piece, dmg * 2 // (piece.info.defense + piece.info.defense // 2), ARMOR_WEAR):
+        durability_lost(c, slot)
+
+
+def durability_lost(c, slot):
+    """The item in slot lost a durability point: 2A tells the client, the values follow the wear (nothing from it at
+    0)."""
+    item = c.player.inventory[slot]
+    c.write(SDurability(slot=slot, durability=item.durability, unlock=0))
+    stats.update(c)
+
+
 def reach(p):
     """Tiles a normal attack reaches, with some lag allowed, mup's choice."""
     return BOW_REACH if ammunition(p) is not None else MELEE_REACH
@@ -157,6 +209,7 @@ def player_attack(game, c, mob, rng=random):
         return
     dmg, flags = roll(v, weapon_ranges(p), rng)
     dmg += effect.value(c, effect.GREATER_DAMAGE)
+    wear_weapon(c, mob)
     hit_monster(c, mob, max(dmg - mob.info.defense, minimum_damage(p.level)), flags)
 
 
@@ -172,6 +225,7 @@ def monster_attack(game, mob: Monster, c, rng=random):
     dmg -= dmg * v.damage_decrease // 100
     if effect.has(c, effect.DEFENSE):
         dmg = max(1, dmg // 2)
+    wear_armor(c, dmg, rng)
     hit_player(game, mob, c, dmg)
     reflected = dmg * v.reflect // 100
     if reflected > 0 and not mob.dead and not c.player.dead:

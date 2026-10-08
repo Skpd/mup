@@ -49,7 +49,7 @@ to this exe.
 | data file loading | `0x4c09b0`: `Quest.bmd` `0x401040`, `Dialog.bmd` `0x459aa0` |
 | objects (characters, monsters, NPCs) | 400 of `0x364` bytes at `DAT_07a5f9b8`: `+0x00` in use, `+0x1ac` cid, `+0x2cd` dead, `+0x2d6` / `+0x2d7` walk target, `+0x358` / `+0x35c` tile x / y. Find by cid `0x43dc30` (400 when missing), remove all but one cid `0x43dac0` |
 | world load | `0x4bef50`: object models `0x4bd0b0`, then `Data\World{map+1}\`: `Terrain.map` (`0x4aa9c0`), `Terrain{map+1}.att` (`0x4aa820`), `terrain.obj` (`0x4b27d0`), textures, see [Maps](#maps). Current map number at `0x4fd640`, read in 51 functions |
-| hero character | pointer at `0x7c0dd1c`: `+0x0e` level, `+0x10` exp, `+0x14` str `+0x16` agi `+0x18` vit `+0x1a` ene, `+0x1c` life `+0x1e` mana `+0x20` max life `+0x22` max mana, `+0x40` next exp, `+0x60` level up points (2 bytes each, exp and next exp 4). Kept encrypted between uses, see [Extending the client](#extending-the-client) |
+| hero character | pointer at `0x7c0dd1c`: `+0x0e` level, `+0x10` exp, `+0x14` str `+0x16` agi `+0x18` vit `+0x1a` ene, `+0x1c` life `+0x1e` mana `+0x20` max life `+0x22` max mana, `+0x40` next exp, `+0x60` level up points (2 bytes each, exp and next exp 4), `+0x554` money, `+0x558` the vault's zen. Kept encrypted between uses, see [Extending the client](#extending-the-client) |
 | next level exp | `0x45c980`, called by the `F3 05` handler, see [Client limits](#client-limits) |
 | `Text.bmd` in memory | `0x7c45a4c`, 300 bytes per entry (from the character window's format pointers) |
 | frame | `SwapBuffers` in `0x4d1460` (game scenes), `0x4c3b20` (map loading, calls the world load), `0x4d0820` (loading screen) |
@@ -58,6 +58,8 @@ to this exe.
 | path finder | `0x425720`, state at `0x57c7208` (`+0x08` points to the attributes) |
 | gate check, sends `1C` | `0x474030`, every frame. `Gate.bmd` in memory at `0x7c11328` |
 | items | see [Items](#items): type from item bytes `0x459b80`, item from bytes `0x45a270`, place in a window `0x48d940`, remove `0x48e0d0`, put the held item back `0x48e650`, free space check `0x493880`. Held item `0x7d92a60` (`0x44` bytes), its source slot `0x7da71e0`, move pending `0x7dab7ad`. Equipment window `0x48eec0`, inventory window clicks and right click use `0x4916f0` |
+| NPC windows | see [NPC windows](#npc-windows): inventory open `0x7dab76f`, shop `0x7dab770` (kept encoded like the hero), warehouse `0x7dab771`, chaos machine `0x7dab772`, trade `0x7dab773`, Devil Square `0x7dab774`, server division `0x7dab77c`; all closed by `0x48cd10`. Shop / warehouse grid `0x7da71f8` (120 items of `0x44`), chaos box `0x7daaea0` (32). Window clicks: shop `0x4a19f0`, warehouse `0x4a0e40` (zen dialog `0x4c4300`), chaos machine `0x49f070` (drawn by `0x4a7760`), inventory buttons `0x49ce00`, held item dropped on a window `0x497760` / `0x493dc0`, dialogs pending `0x7dab788` (1 sell, 2 mix, 3 trade, 4 vault lock) |
+| prices | item value `0x45ad50`, repair cost `0x486910`, full durability `0x486fd0`, repair all cost `0x486aa0` (into `0x7dab750`), see [Prices](#prices) |
 
 ## Transport
 
@@ -111,6 +113,7 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C1 F3 06` level up point result | `[4]` high nibble 0: nothing changes. Otherwise the low nibble is the stat (0 str, 1 agi, 2 vit, 3 ene): the client takes one level up point and adds 1 to the stat itself, vit also sets max life and ene max mana to `[6..7]`. No maximum is checked | code `0x41b9a0` (asm) |
 | `C4 F3 10` inventory | must be encrypted. `[5]` count, then 5 bytes each: `[+0]` slot, `[+1..4]` item (see [Items](#items)). Slots 0..11 equipment, 12..75 the 8 x 8 grid (`slot - 12 = y * 8 + x`, the item's top left tile). The client empties equipment and grid first, then places each item (`0x48d940`) | code `0x414310` |
 | `C1 F3 11` skill list | `[4]` count (max 20), then 3 bytes each: `[+0]` slot, `[+1]` skill number, `[+2]` unused. `[4]` = `0xFE`: set one skill, `[5]` slot `[6]` number. `[4]` = `0xFF`: remove skill at slot `[5]` | code `0x414010` |
+| `C1 F3 14` item changed | `[4]` inventory slot, `[5..8]` the item placed there (`0x48d940`, below 12 equipment), the held item is gone, a sound. The answer to a jewel | code (dispatcher `0x42190a`, asm) |
 | `C1 F3 30` key settings | 18 bytes: `[4..13]` the skill number on hotkey 0..9, `FF` none: the client looks the number up in its skill list (character `+0x63`) and puts that list index on the hotkey. `[14..17]` other settings, read, not reviewed. Same layout as the client's `F3 30` | code `0x41ff50` |
 | `C1 00` chat | `[3..12]` name, `[13..72]` message. Message prefix `~` party, `@` guild, `#` shout, anything else normal chat | code `0x414960` |
 | `C1 0D` notice | `[3]` type, `[4..]` text | code `0x414d10` (reads only) |
@@ -138,7 +141,17 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C1 26` life | `[3]` `FF`: life, `FE`: max life, value `[4..5]` **big endian**. `FD`: unlocks item use (see [Items](#items)). Other values: an inventory slot (12..75), the count (durability) of the item there goes down by one, at 0 the item is removed. Doesn't unlock item use | code `0x41bcd0` |
 | `C1 27` mana | `[3]` `FF`: mana, `FE`: max mana, value `[4..5]` big endian. Other values: mana from `[4..5]` and the item count as in `26` | code `0x41bfc0` (asm) |
 | `C1 28` item deleted | `[3]` slot (`FF`: none, equipment slots too), `[4]` not 0: unlocks item use | code (dispatcher), `0x48e0d0` |
-| `C1 2A` durability | `[3]` slot (below 12 equipment), `[4]` durability, `[5]` not 0: unlocks item use | code `0x41c3b0` |
+| `C1 2A` durability | `[3]` slot (below 12 equipment), `[4]` durability, `[5]` not 0: unlocks item use. The character values aren't computed again (the `34` result and equipment changes do) | code `0x41c3b0` |
+| `C3 30` talk result | must be encrypted. Opens a window with the inventory and closes the character window, `[3]`: 2 warehouse (unlocked), 3 chaos machine (mix state 0, `[4..7]` the Devil Square invitation rates it shows for levels 2..5, level 1 is 60), 4 Devil Square (Charon), 5 the server division dialog (Text 448, its close sends `31`), anything else the shop. mup sends 8 bytes. See [NPC windows](#npc-windows) | code `0x41abc0` |
+| `C2 31` window items | `[4]` 3: the chaos machine's 8 x 4 box: mix state 2, "Chaos combining has failed" (Text 594), the box emptied, then the items. Anything else: the 8 x 15 grid the shop and the warehouse share, emptied, then the items placed by slot (`0x48d3b0`: x = slot & 7, y = slot >> 3, no bounds or overlap check). `[5]` count, 5 bytes each from `[6]`: slot, item | code `0x414890` |
+| `C1 32` buy result | `[3]` FF: refused. Otherwise the inventory slot (as in `22`) and `[4..7]` the item, placed with a sound. Both end the wait (one buy at a time). The money isn't in it, mup sends `22 FE` before | code (dispatcher `0x42204e`, asm) |
+| `C1 33` sell result | `[3]` 0: refused, the held item goes back (`0x48e650`). Otherwise the held item is gone and `[4..7]` is the money | code (dispatcher `0x42208c`, asm) |
+| `C1 34` repair result | `[4..7]` not 0: the money, the character values computed again (`0x45c9f0`), a sound. 0: nothing. The durabilities come with `2A` before | code (dispatcher `0x4220de`, asm) |
+| `C1 81` vault zen | `[3]` not 0: `[4..7]` the zen in the vault (hero `+0x558`), `[8..11]` the money (`+0x554`). 0: nothing changes | code `0x41d970` (the decompile loses the packet pointer, the offsets match the hero fields) |
+| `C1 82` close | closes the inventory and the NPC windows (`0x48cd10`), the held item is gone from the cursor (not put back), closes the vault's zen dialog | code `0x41dbe0` |
+| `C1 83` vault lock | `[3]` 0 unlocked, 1 locked, 10 / 11 / 13 messages, 12: does the move or zen request it held back while locked. Not used by mup | code `0x41dc30` |
+| `C1 86` mix result | `[3]` 1: "Chaos combining has succeeded" (Text 595), the box emptied, `[4..7]` placed in slot 0, mix state 2. 2: "Not enough Zen to combine items" (596), mix state 0. Anything else: mix state 2, nothing shown. The money isn't in it | code `0x41f960` |
+| `C1 87` close | as `82` | code `0x41fa20` |
 | `C1 A0` quest states | `[3]` byte count, then the state bytes (see [Quest window](#quest-window)). The client zeroes its 50 state bytes and copies `[3]` bytes, the count isn't checked against 50. Also sets the quest class from the hero's class (low 3 bits class, bit 3 second class): the only place it is set | code `0x420320`, `0x401160` |
 | `C1 A1` quest dialog | `[3]` quest index, `[4]` state byte, stored as state byte `quest >> 2`. Closes the other windows and opens the quest window with the text for the quest's state. Doesn't check which NPC is being talked to | code `0x420350`, `0x4018d0` |
 | `C1 A2` quest state result | `[3]` quest index, `[4]` result: 0 does what `A1` does with `[5]` as the state byte, anything else is ignored | code `0x420380` |
@@ -156,7 +169,14 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C1 F3 01` create character | `[4..13]` name, `[14]` class: **class number << 2** (0 dw, 16 dk, 32 elf, 48 mg), everything the server sends uses class number << 3 | traffic |
 | `C3 F1 02` logout request | 5 bytes, sent encrypted: `[4]` type as in the result: 0 close the game, 1 character select, 2 server select. Preceded by `F3 30` (types 0 and 1 before, type 2 right after). The sender isn't in the sender index, a byte scan for `F1` head stores doesn't find it either | traffic (`1791402942.log`, `1791403016.log`) |
 | `C1 F3 30` key settings | 18 bytes, sent on every logout (`0x4c0000`): `[4..13]` the skill number on hotkey 0..9 (taken from the skill list, all 0 when none set in traffic), `[14..17]` other settings (window flags, values + `0x40`; `09 00 04 08` seen), not reviewed. The server's `F3 30` has the same layout | code, traffic |
-| `C3 31` | no fields, sent right after `F3 00` when going back to character select. Usual meaning: close the NPC / shop window. Sent by the quest window's close (`0x401920`: answer return code 2, close button), which the character select reset (`0x412700`) also calls | traffic, code `0x401920` |
+| `C3 31` close | no fields, sent right after `F3 00` when going back to character select. Sent by the quest window's close (`0x401920`: answer return code 2, close button), which the character select reset (`0x412700`) also calls, by the close of the server division dialog (`0x49e7b0`) and of the Devil Square window (`0x49d500`). The shop window closes without a packet | traffic, code `0x401920` |
+| `C3 32` buy | `[3]` the shop slot of the item clicked (its top left tile). Sent on a click in the shop grid outside repair mode, one until `32` answers. The client checks neither money nor room | code `0x4916f0` |
+| `C3 33` sell | `[3]` the inventory slot the held item came from. Sent when the held item is dropped on the shop window. Pets 13/0..3, jewels of bless, soul, life and chaos, wings 12/0..2, weapons and armor above +4 and excellent items after a yes to "An expensive item!" (Text 536), quest items 14/23..14/26 never | code `0x497760` |
+| `C3 34` repair | `[3]` slot, `[4]` 1 from the inventory window's repair button, 0 in a shop. A click on an item in repair mode sends it for every type the client repairs (below `0x1C0` but pets 13/0..3, 13/10, arrows and bolts), worn or not. `[3]` FF `[4]` 0: the shop's repair all button | code `0x4a19f0`, `0x48eec0`, `0x4916f0` |
+| `C1 81` vault zen | `[3]` 0 deposit, 1 withdraw, `[4..7]` the amount, xor chained. The dialog checks it against the money / the vault's zen first | code `0x4c4300` |
+| `C1 82` vault closed | 3 bytes, the client closed its windows itself (the held item put back first) | code `0x4aa5c0` |
+| `C1 86` mix | 3 bytes, after the client recognised a mix, found room in the inventory and the player agreed ("Do you want to combine your items?", Text 539). Mix state 1 until an answer | code `0x497760`, `0x49f070` |
+| `C1 87` chaos machine closed | 3 bytes, only with an empty box and no held item, otherwise Text 593. The client closed its windows itself | code `0x4aa3a0` |
 | `C3 30` talk | `[3..4]` NPC cid. Sent when clicking an NPC of type 234 (`EA`) or higher, clicks on lower types send nothing | code `0x4650a0` |
 | `C3 A0` quest states request | no fields, sent right before `30` while the client has no quest class yet (until the first `A0` arrives) | code `0x4650a0` |
 | `C3 A2` quest proceed | `[3]` quest index, `[4]` 1. Sent by a dialog answer with return code 1 (after the client's requirement check) or 3 (no check), and by a click in an area of the quest window (`0x402660`, when it is drawn not reviewed) | code `0x401d00`, `0x402660` |
@@ -176,8 +196,8 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C1 00` chat | name + message, not reviewed yet: send a chat line and check the log | - |
 | `C3 22` pick up | `[3..4]` item id BE. Sent when the hero is within 150 units of the item (1.5 tiles from the tile centre, the client walks there first) and the item fits in the grid (zen always), one at a time until `22` answers | code `0x4650a0` |
 | `C3 23` drop | `[3]` x `[4]` y (the tile under the mouse), `[5]` the slot the held item came from | code `0x497760` |
-| `C3 24` move | 11 bytes: `[3]` source window, `[4]` source slot, `[5..8]` the item as the client has it, `[9]` target window, `[10]` target slot. Windows and slots as in the result. One at a time until `24` answers. The client also sends it on its own: arrows / bolts from the grid into a hand when a bow / crossbow has none (`0x463d60`), the left hand item to the right hand (`0x474ac0`) | code `0x422db0` |
-| `C3 26` use item | `[3]` inventory slot, `[4]` target slot (0 for potions). Sent on a right click on 14/0..6 (apple, potions), 14/8, 14/9, 14/20, group 15 (scrolls), 12/7..14, 12/16..19, and by the potion hotkeys, and by the client itself with a mana potion's slot when the hero lacks the mana for a skill (`0x46f270`). Locks item use until the server unlocks it (see [Items](#items)). mup answers a scroll / orb it teaches with `F3 11` `FE` and `28` (slot, 1), the usual answer, not checked in the client's code | code `0x4916f0` |
+| `C3 24` move | 11 bytes: `[3]` source window, `[4]` source slot, `[5..8]` the item as the client has it, `[9]` target window, `[10]` target slot. Windows and slots as in the result, the warehouse and the chaos machine while their window is open (into the box only mix materials, see [Chaos machine](#chaos-machine)). One at a time until `24` answers. The client also sends it on its own: arrows / bolts from the grid into a hand when a bow / crossbow has none (`0x463d60`), the left hand item to the right hand (`0x474ac0`) | code `0x422db0` |
+| `C3 26` use item | `[3]` inventory slot, `[4]` target slot (0 for potions). Sent on a right click on 14/0..6 (apple, potions), 14/8, 14/9, 14/20, group 15 (scrolls), 12/7..14, 12/16..19, and by the potion hotkeys, and by the client itself with a mana potion's slot when the hero lacks the mana for a skill (`0x46f270`). Locks item use until the server unlocks it (see [Items](#items)). mup answers a scroll / orb it teaches with `F3 11` `FE` and `28` (slot, 1), the usual answer, not checked in the client's code. A jewel of bless, soul or life held and dropped on an item of the inventory grid sends `[3]` the jewel's slot `[4]` the item's, see [Jewels](#jewels) | code `0x4916f0`, `0x493dc0` |
 
 ## Terrain
 
@@ -366,7 +386,8 @@ level, after the staff's durability factor (magic durability, `item.bmd` 42). Kn
 ene / 10 %`, gladiators `200 + ene / 30 %`.
 
 **Durability factor** (`0x45baf0`): maximum = `item.bmd` durability + 1 per item level for levels 1..4 and 2 per
-level above, + 15 for excellent items. worn = 1 - durability / maximum: above 0.8 the value loses 50%, above 0.7
+level above, + 15 for excellent items. This is less than the full durability of the tooltip and the prices
+(`0x486fd0`, see [Prices](#prices)) from level 10. worn = 1 - durability / maximum: above 0.8 the value loses 50%, above 0.7
 30%, above 0.5 20%, otherwise nothing (`v - int(v * factor)`).
 
 **Item values** (`0x45a270`): damage min / max, defense rate, defense and magic defense grow with the item level as in
@@ -409,6 +430,96 @@ between uses (`0x45cb20`). Copied to `data/skill.bmd`.
 - Learning: scroll 15/n teaches skill n + 1 (15/0 poison .. 15/13 inferno), orbs 12/7 skill 41, 12/8 26, 12/9 27,
   12/10 28, the summon orb 12/11 skill 30 + its level (the tooltip `0x487030` names it). The scroll's energy
   requirement is the item's (see Items).
+
+## NPC windows
+
+From code. The client sends `30` for objects of type 234 and up, next to them (the hero's talk action, `0x4650a0`).
+Before it, it marks the shop as one with repair buttons for types 243 (Eo), 246 (Zienna) and 251 (Hanzo) (`0x7dab77e`)
+and leaves repair mode. The NPC types this client has (`Data/Local/NpcName(Eng).txt`): traps 100..103, 200 and
+235..255; the later server's section 0 also has 226, 229, 230, 233, 257, 375, 379, 450, 451.
+
+The `30` answer picks the window, the inventory opens beside it. What the server sends with it and how each closes:
+
+| window | `30` | then | the client closes it |
+|---|---|---|---|
+| shop | `[3]` 0 | `31` with the goods | close buttons and hotkeys, nothing sent |
+| warehouse | `[3]` 2 | `31` with the items, `81` with the zen | close button and hotkeys: puts the held item back, sends `82` |
+| chaos machine | `[3]` 3, `[4..7]` rates | nothing (the box is as the client left it) | only an empty box: sends `87` |
+
+The server's `82` / `87` close every NPC window and the inventory (the held item is dropped from the cursor). `F3 04`
+closes them too (`0x413b00` calls `0x48cd10`), a `1C` map change clears the warehouse flag and repair mode
+(`0x415520`), the others not seen.
+
+**Shop.** A click on an item buys it (`32`), dropping the held item on the window sells it (`33`). The tooltip shows
+the buy price of the shop's items and the sell price of the inventory's (`0x487030`). The repair buttons: repair
+mode (a click on an item sends `34` with its slot) and repair all (`34 FF 00`, the window shows its cost). The
+inventory window has a repair button of its own from level 80 while no NPC window is open (`0x49ce00`, `34` with
+`[4]` 1).
+
+**Warehouse.** 8 x 15, the shop's grid. Buttons: deposit and withdraw (a zen dialog, `81`), lock (a number dialog,
+`83` answers), close. While locked (`0x4fcf4b`, `30` unlocks) a move into or out of the warehouse or a withdrawal waits
+for `83` 12.
+
+**Chaos machine.** See [Chaos machine](#chaos-machine).
+
+## Prices
+
+From code, `0x45ad50(item, kind)`: kind 0 buy, 1 sell, 2 the base of the repair cost. Integer arithmetic, item level
+L, rank R = `item.bmd` level + 3 L, + 25 for an item with an excellent option line.
+
+| item | price |
+|---|---|
+| bolts 4/7, arrows 4/15 | 100 / 1400 / 2200 (bolts), 70 / 1200 / 2000 (arrows) for L 0 / 1 / 2, times the count / `item.bmd` durability. From L 3 the client uses the item's address as the price (garbage) |
+| 14/13 bless, 14/14 soul, 12/15 chaos | 100000, 70000, 40000 |
+| 14/21, 14/20 | 9000, 900 |
+| 14/17 Devil's eye, 14/18 key | by L 0..4 (higher: 4): 30000, 15000, 21000, 30000, 45000 |
+| 14/19 invitation | 120000, 60000, 84000, 120000, 180000 |
+| 14/9 ale at L 1 | 1000 |
+| `item.bmd` value (47) not 0 | value² * 10 / 12, times the count for 14/0..14/8 |
+| groups 12, 13, 15 | R³ + 100, times option + 1 for each life recovery line (`41`) |
+| others | R + 4, 10, 25, 45, 65, 95, 135 for L 5..11, then (R + 40) R² / 8 + 100, 80% for one-handed items of groups 0..6. Then per option line: a weapon skill (`12`..`18`) + 1.5 times, `3C` / `3D` / `3F` + 4 / 8 / 12 / 16 (`3E` 5 / 10 / 15 / 20): + 6/10, 14/10, 28/10, 56/10 (higher: nothing), luck + 25%, each excellent line twice |
+
+Sell and repair base: a third. Sell, for types below `0x1C0` but pets 13/0..3, 13/10, arrows, bolts and wings 12/0..2:
+`+ (int)((1 - durability / full) * price * -0.6f)`; the full durability is 0 for items without one (orbs, the jewel of
+chaos), the division gives garbage. Last, the price is rounded down to 100 from 1000, to 10 from 100.
+
+**Full durability** (`0x486fd0`, the tooltip's `durability/full` too): `item.bmd` durability (magic durability 42 for
+staffs), + 1 per level for levels 1..4, 2 for 5..9, 3 for 10, 4 for 11..15, + 15 with an excellent bit.
+
+**Repair cost** (`0x486910(base, durability, full)`, floats): worn = `(float)(1 - durability / full)`; worn <= 0: 0.
+Otherwise `sqrt(base) * sqrt(sqrt(base)) * 3 * worn + 1`, times 1.4f at durability 0, then `+ own * cost * 0.05f`
+(own: the inventory's repair button, 5% more), truncated, rounded like the prices. Repair all: the sum of the costs of
+the equipment and grid items the client repairs that are worn (`0x486aa0`).
+
+## Chaos machine
+
+From code. Items go into the 8 x 4 box with `24` (window 3). The client takes only mix materials (`0x493dc0`): the
+jewels of bless, soul, life and chaos, Devil's eyes and keys, wings 12/0..2 from +9, a horn of uniria with full
+durability (255), weapons and armor from +9 or from +4 with an option. Every frame it recognises the mix (`0x49b680`
+into `0x7dab7b4`) and shows its name (Text 601..605, 612), rate and zen (`0x4a7760`):
+
+| mix | items | rate | zen |
+|---|---|---|---|
+| 1 chaos weapon | a jewel of chaos and at least one weapon / armor from +4 with an option, maybe bless, soul, more chaos or a horn of uniria that isn't full, nothing else | the box's buy prices / 20000, at most 100 | 10000 per % |
+| 2 Devil Square invitation | 3 items: chaos, a Devil's eye and key of the same level (other levels: -2, Text 600) | level 1: 60, 2..5: the `30` rates | 10000, 10000, 20000, 40000, 70000 by level |
+| 3 +10 | 4 items: chaos, bless, soul and a +9 item (below `0x183`) | 50, 75 with luck | 2 000 000 |
+| 4 +11 | 6 items: chaos, 2 bless, 2 soul and a +10 item | 45, 70 with luck | 4 000 000 |
+| 5 Dinorant | 4 items: chaos and 3 horns of uniria at full durability | 70 | 250 000 |
+
+Luck is that of the last +9 / +10 item or weapon / armor from +4 the client looked at (slot order). The mix button
+(`0x49f070`) needs mix state 0 and a recognised mix: none shows "You are lacking items." (580), then it checks for a free
+area in the inventory (`0x49b380` with 5 and 4 for the chaos weapon mix, otherwise the box's widest and tallest item,
+not reviewed further; Text 581) and asks (Text 539) before `86`. The mix state (`0x7dab78c`): 0 ready, 1 mixing (no items in or out of the box), from 2 it counts up every frame
+as the box is drawn (an animation up to `0x33`), so after a mix the button works again only when the window opens
+again (`30`) or after `86` 2.
+
+## Jewels
+
+From code (`0x493dc0`). A jewel of bless (14/13), soul (14/14) or life (14/16) held over an item of the inventory
+grid marks the tiles; dropped there it sends `26 [3] jewel slot [4] item slot`, locks item use and keeps holding the
+jewel. Only on items below `0x183` (weapons, armor, wings 12/0..2) but arrows and bolts, bless up to +5, soul up to
++8, life on any; not while the warehouse or a trade is open, not while item use is locked. The answer: `F3 14` with
+the item (the jewel leaves the cursor), `28` for the jewel's slot unlocks item use.
 
 ## Client limits
 

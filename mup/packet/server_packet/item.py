@@ -48,7 +48,7 @@ class MoveItemResult(Packet):
         (5, 'item', Raw(4)),
     )
 
-    INVENTORY = 0
+    INVENTORY, TRADE, WAREHOUSE, CHAOS_MACHINE = 0, 1, 2, 3
     FAILED = 0xFF
 
     @classmethod
@@ -95,4 +95,14 @@ class Durability(Packet):
         (3, 'slot', u8),
         (4, 'durability', u8),
         (5, 'unlock', u8, 1),
+    )
+
+
+class ItemChanged(Packet):
+    """C1 F3 14: the item in inventory slot [4] is now [5..8] (a jewel's result), the item held is gone."""
+    code = C1, 0xF3, 0x14
+    size = 9
+    fields = (
+        (4, 'slot', u8),
+        (5, 'item', Raw(4)),
     )

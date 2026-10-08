@@ -24,7 +24,7 @@ def attack_handler(msg: CAttack, proto: BaseProtocol):
         c.write(action)
 
     attacked = proto.server.monsters.get(msg.attacked_cid)
-    if attacked is None or attacked.dead or attacked not in proto.view or attacked.owner is not None:
+    if attacked is None or attacked.dead or attacked not in proto.view or not attacked.attackable:
         return
     if distance(p.x, p.y, attacked.x, attacked.y) > combat.reach(p):
         logger.debug('%s at %s,%s is too far from %s at %s,%s', p.name, p.x, p.y, attacked.cid, attacked.x, attacked.y)

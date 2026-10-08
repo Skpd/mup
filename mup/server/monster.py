@@ -12,7 +12,10 @@ DEVIL_SQUARE = 9
 SPAWN_MAPS = set(MAP_NAMES) - {DEVIL_SQUARE}  # Devil Square's monsters come with its event (roadmap M7)
 SINGLE_SPREAD = 3  # a single monster appears within this many tiles of its spot, mup's choice
 # MonsterSetBase sections: 0 NPCs and traps, 1 monsters in an area, 2 single monsters, 3 and 4 events
-AREA, SINGLE = 1, 2
+NPC, AREA, SINGLE = 0, 1, 2
+# the NPCs and traps this client has (Data/Local/NpcName(Eng).txt), the later file's others are left out
+TRAPS = range(100, 104)
+NPC_TYPES = {*TRAPS, 200, *range(235, 256)}
 
 
 def load_info(path):
@@ -34,10 +37,12 @@ def load_info(path):
 
 
 def load_spawns(path, info):
-    """Monster spawns on the maps of SPAWN_MAPS: the area and single monster sections."""
+    """Spawns on the maps of SPAWN_MAPS: NPCs and traps of the types this client has, monsters in areas and single
+    ones."""
     spawns = []
     section = None
     unknown = Counter()
+    left_out = Counter()
     with open(path, encoding='latin-1') as f:
         for line in f:
             v = line.split('//', 1)[0].split()
@@ -49,7 +54,7 @@ def load_spawns(path, info):
             if section is None:
                 section = int(v[0])
                 continue
-            if section not in (AREA, SINGLE):
+            if section not in (NPC, AREA, SINGLE):
                 continue
 
             number, map_id, leash = int(v[0]), int(v[1]), int(v[2])
@@ -58,7 +63,14 @@ def load_spawns(path, info):
             if number not in info:
                 unknown[number] += 1
                 continue
-            if section == AREA:
+            if section == NPC:
+                if number not in NPC_TYPES:
+                    left_out[number] += 1
+                    continue
+                x, y = int(v[3]), int(v[4])
+                spawns.append(Spawn(number, map_id, range(x, x + 1), range(y, y + 1), 0, npc=True,
+                                    direction=int(v[5])))
+            elif section == AREA:
                 x1, y1, x2, y2, count = int(v[3]), int(v[4]), int(v[5]), int(v[6]), int(v[8])
                 spawns.append(Spawn(number, map_id, range(x1, x2 + 1), range(y1, y2 + 1), leash, count))
             else:
@@ -67,6 +79,8 @@ def load_spawns(path, info):
                                     range(max(0, y - SINGLE_SPREAD), min(255, y + SINGLE_SPREAD) + 1), leash))
     if unknown:
         logger.warning('%s: spawns of unknown monster types skipped: %s', path, dict(unknown))
+    if left_out:
+        logger.info('%s: NPCs not in this client left out: %s', path, dict(left_out))
     return spawns
 
 
@@ -79,9 +93,13 @@ def create(spawns, info, cids, last_cid):
 
 
 def spawn(game, mob, now):
-    """Puts mob with full life on a free spot of its spawn area. False when there is none."""
+    """Puts mob with full life on a free spot of its spawn area, an NPC on its spot. False when there is none."""
     m = game.maps[mob.map_id]
-    spot = m.terrain.random_spot(mob.spawn.xs, mob.spawn.ys, m.monster_can_stand)
+    if mob.npc:
+        spot = mob.spawn.xs.start, mob.spawn.ys.start  # also in the safe zone
+        mob.direction = mob.spawn.direction
+    else:
+        spot = m.terrain.random_spot(mob.spawn.xs, mob.spawn.ys, m.monster_can_stand)
     if spot is None:
         return False
     mob.x, mob.y = mob.home = spot

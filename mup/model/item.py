@@ -70,6 +70,7 @@ class Item:
     option: int = 0  # 0..7
     excellent: int = 0  # 6 bits
     serial: Optional[int] = None
+    wear: int = 0  # use since the last durability point it lost, mup.server.item.wear, not stored
 
     @property
     def type(self):

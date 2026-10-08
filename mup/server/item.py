@@ -112,11 +112,15 @@ def level_bonus(level):
     return 3 * min(level, 9) + (4 + 5 * (level - 10) if level >= 10 else 0)
 
 
+# what each item level adds to the full durability (client 0x486fd0): levels 1..4 1, 5..9 2, 10 3, 11..15 4
+DURABILITY_STEPS = (1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 4, 4, 4, 4, 4)
+
+
 def max_durability(item):
     """
-    Full durability as the client's durability factor counts it (0x45baf0): item.bmd's (the magic durability for
-    staffs), + 1 per item level up to 4 and 2 per level above, + 15 for excellent items. Items without one (potions,
-    jewels) are counted, a new one is 1.
+    Full durability as the client's tooltip and its prices count it (0x486fd0): item.bmd's (the magic durability
+    for staffs) with what the levels add, + 15 for excellent items. Arrows and bolts are a count, items without
+    durability (potions, jewels) a new one is 1.
     """
     i = item.info
     base = i.durability or i.magic_durability
@@ -124,13 +128,30 @@ def max_durability(item):
         return 1
     if item.type in (BOLT, ARROWS):
         return base
-    return min(0xFF, base + min(item.level, 4) + 2 * max(0, item.level - 4) + (15 if item.excellent else 0))
+    return min(0xFF, base + sum(DURABILITY_STEPS[:item.level]) + (15 if item.excellent else 0))
+
+
+def wear(item, amount, limit):
+    """
+    Adds amount to what item took since its last durability point, at more than limit it loses one. True when it
+    did. The shape of the usual servers' wear (weapons by the defense they hit, armor by the damage taken),
+    mup.server.combat has the numbers.
+    """
+    if item.durability <= 0 or amount <= 0:
+        return False
+    item.wear += amount
+    if item.wear <= limit:
+        return False
+    item.wear = 0
+    item.durability -= 1
+    return True
 
 
 def wear_factor(item, base=None):
     """The share of an item's values lost to wear (client 0x45baf0): 50% above 80% worn, 30% above 70%, 20% above
     50%, nothing below. worn is 1 - durability / maximum, the maximum counted from item.bmd's durability (base: the
-    magic durability for a staff's wizardry)."""
+    magic durability for a staff's wizardry) + 1 per level up to 4 and 2 above, less than max_durability from level
+    10."""
     i = item.info
     base = i.durability if base is None else base
     full = base + min(item.level, 4) + 2 * max(0, item.level - 4) + (15 if item.excellent else 0)

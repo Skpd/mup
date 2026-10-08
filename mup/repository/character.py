@@ -2,6 +2,7 @@ import logging
 from mup.error import NotFoundError
 from mup.model.item import Item
 from mup.model.player import Player, CharacterClass
+from mup.model.warehouse import Warehouse
 
 logger = logging.getLogger(__name__)
 
@@ -27,18 +28,27 @@ class CharacterRepository:
         p = Player(id=row['id'], class_type=CharacterClass(row['class']),
                    **{attr: row[column] for column, attr in COLUMNS.items()})
         p.quest_state = bytes(p.quest_state)
-        p.inventory = self._inventory(p)
+        p.inventory = self._items(p.name, "character_id = ? AND owner = 'inventory'", p.id)
+        p.chaos_box = self._items(p.name, "character_id = ? AND owner = 'chaos'", p.id)
         return p
 
-    def _inventory(self, p):
-        inventory = {}
-        for row in self.db.execute("SELECT * FROM items WHERE character_id = ? AND owner = 'inventory'", (p.id,)):
+    def _items(self, whose, where, key):
+        """Slot -> Item of the rows matching where (key is its parameter), whose names them in the log."""
+        items = {}
+        for row in self.db.execute('SELECT * FROM items WHERE ' + where, (key,)):
             info = self.item_info.get(row['type'])
             if info is None:
-                logger.warning('%s: item %s of unknown type %s left out', p.name, row['serial'], row['type'])
+                logger.warning('%s: item %s of unknown type %s left out', whose, row['serial'], row['type'])
                 continue
-            inventory[row['slot']] = Item(info, serial=row['serial'], **{c: row[c] for c in ITEM_COLUMNS})
-        return inventory
+            items[row['slot']] = Item(info, serial=row['serial'], **{c: row[c] for c in ITEM_COLUMNS})
+        return items
+
+    def load_warehouse(self, account_id):
+        """The account's vault, empty when it has none yet."""
+        row = self.db.execute('SELECT zen FROM warehouses WHERE account_id = ?', (account_id,)).fetchone()
+        items = self._items('warehouse of account {}'.format(account_id), "account_id = ? AND owner = 'warehouse'",
+                            account_id)
+        return Warehouse(account_id, zen=row['zen'] if row else 0, items=items)
 
     def by_account(self, account_id):
         """Characters of an account in slot order, with their items, without skills."""
@@ -73,14 +83,15 @@ class CharacterRepository:
             self._save_skills(p)
             self._save_items(p)
 
-    def save(self, p: Player):
-        """Writes what changes in game: stats, position, skills, items."""
+    def save(self, p: Player, warehouse: Warehouse = None):
+        """Writes what changes in game: stats, position, skills, items, and the account's vault when it was opened.
+        One transaction, so an item that moved between them is stored once."""
         with self.db:
             self.db.execute('UPDATE characters SET {}, class = ? WHERE id = ?'.format(
                 ', '.join(c + ' = ?' for c in SAVED)),
                 [getattr(p, COLUMNS[c]) for c in SAVED] + [p.class_type.value, p.id])
             self._save_skills(p)
-            self._save_items(p)
+            self._save_items(p, warehouse)
 
     def save_key_settings(self, p: Player):
         with self.db:
@@ -91,14 +102,22 @@ class CharacterRepository:
         self.db.executemany('INSERT INTO skills (character_id, slot, number) VALUES (?, ?, ?)',
                             [(p.id, slot, number) for slot, number in enumerate(p.skills) if number is not None])
 
-    def _save_items(self, p):
+    def _save_items(self, p, warehouse=None):
         # an item that changed hands may still be stored with its last owner: REPLACE takes it over by its serial
-        self.db.execute("DELETE FROM items WHERE character_id = ? AND owner = 'inventory'", (p.id,))
-        columns = ('serial', 'owner', 'character_id', 'slot', 'type') + ITEM_COLUMNS
+        self.db.execute("DELETE FROM items WHERE character_id = ? AND owner IN ('inventory', 'chaos')", (p.id,))
+        rows = [('inventory', p.id, None, slot, item) for slot, item in p.inventory.items()]
+        rows += [('chaos', p.id, None, slot, item) for slot, item in p.chaos_box.items()]
+        if warehouse is not None:
+            self.db.execute("DELETE FROM items WHERE account_id = ? AND owner = 'warehouse'", (warehouse.account_id,))
+            rows += [('warehouse', None, warehouse.account_id, slot, item) for slot, item in warehouse.items.items()]
+            self.db.execute('INSERT OR REPLACE INTO warehouses (account_id, zen) VALUES (?, ?)',
+                            (warehouse.account_id, warehouse.zen))
+        columns = ('serial', 'owner', 'character_id', 'account_id', 'slot', 'type') + ITEM_COLUMNS
         self.db.executemany('INSERT OR REPLACE INTO items ({}) VALUES ({})'.format(
             ', '.join(columns), ', '.join('?' * len(columns))),
-            [(item.serial, 'inventory', p.id, slot, item.type) + tuple(int(getattr(item, c)) for c in ITEM_COLUMNS)
-             for slot, item in p.inventory.items()])
+            [(item.serial, owner, character, account, slot, item.type)
+             + tuple(int(getattr(item, c)) for c in ITEM_COLUMNS)
+             for owner, character, account, slot, item in rows])
 
     def delete(self, p: Player):
         """The character with its skills and items."""

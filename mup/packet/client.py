@@ -22,6 +22,10 @@ from mup.packet.client_packet.area_hits import AreaHits as AreaHits097
 from mup.packet.client_packet.key_settings import KeySettings as KeySettings097
 from mup.packet.client_packet.item import (PickUp as PickUp097, DropItem as DropItem097, MoveItem as MoveItem097,
                                            UseItem as UseItem097)
+from mup.packet.client_packet.npc import (Talk as Talk097, CloseWindow as CloseWindow097, Buy as Buy097,
+                                          Sell as Sell097, Repair as Repair097, WarehouseMoney as WarehouseMoney097,
+                                          WarehouseClose as WarehouseClose097, Mix as Mix097,
+                                          ChaosClose as ChaosClose097)
 
 CLoginRequest = LoginRequest097
 CServerList = ServerList097
@@ -48,6 +52,15 @@ CPickUp = PickUp097
 CDropItem = DropItem097
 CMoveItem = MoveItem097
 CUseItem = UseItem097
+CTalk = Talk097
+CCloseWindow = CloseWindow097
+CBuy = Buy097
+CSell = Sell097
+CRepair = Repair097
+CWarehouseMoney = WarehouseMoney097
+CWarehouseClose = WarehouseClose097
+CMix = Mix097
+CChaosClose = ChaosClose097
 
 # head, sub (None for packets without one) -> packet class
 head_code_map = {(p.code[1], p.code[2] if len(p.code) > 2 else None): p for p in (
@@ -56,6 +69,7 @@ head_code_map = {(p.code[1], p.code[2] if len(p.code) > 2 else None): p for p in
     CLoginRequest, CClientClose, CLogout,
     CCharList, CCharCreate, CCharDelete, CJoinGame,
     CPickUp, CDropItem, CMoveItem, CUseItem,
+    CTalk, CCloseWindow, CBuy, CSell, CRepair, CWarehouseMoney, CWarehouseClose, CMix, CChaosClose,
 )}
 
 

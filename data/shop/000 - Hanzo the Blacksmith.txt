@@ -1,0 +1,14 @@
+// mup: the later server's goods for Hanzo (0/32..0/35, 2/18, 3/11, 5/36, 6/21, 15/30..15/36) aren't in the 0.97
+// client, he sells the beginner weapons of 017 - Leah.txt and the first shields instead
+//Section   Type   Level   Dur   Skill   Luck   Option   Excellent
+0           0      1       0     0       1      1        0
+0           1      0       0     0       1      1        0
+0           2      2       0     1       1      1        0
+1           0      1       0     0       1      1        0
+1           1      1       0     0       1      1        0
+1           4      1       0     0       1      1        0
+5           0      1       0     0       1      1        0
+6           0      0       0     0       1      1        0
+6           1      0       0     0       1      1        0
+6           2      0       0     0       1      1        0
+end

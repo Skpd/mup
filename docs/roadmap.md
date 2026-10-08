@@ -13,7 +13,7 @@ Packet codes are hex, details in `docs/protocol-097.md`. Where a code's meaning 
 | M2 world: maps, gates, monsters | done |
 | M3 items | done |
 | M4 combat and progression | done |
-| M5 NPCs, shops, warehouse, chaos machine | todo |
+| M5 NPCs, shops, warehouse, chaos machine | done |
 | M6 social: whisper, party, trade | todo |
 | M7 guilds, quests, events, PK | todo |
 | B0 bots: session, hunting, levelling (after M2) | todo |
@@ -394,6 +394,50 @@ Steps:
    client.
 
 Not in M5: shops refusing murderers (M7).
+
+Done:
+- Doc: [NPC windows](protocol-097.md#npc-windows) (the windows `30` opens, what each needs, how the client closes
+  them, the repair NPCs 243 / 246 / 251 and the inventory's repair button from level 80),
+  [Prices](protocol-097.md#prices) (buy, sell, repair cost, the full durability of `0x486fd0`, +3 arrows / bolts
+  priced with garbage by the client),
+  [Chaos machine](protocol-097.md#chaos-machine) (what the box takes, the five mixes the client recognises with their
+  rates and zen, the mix state that needs the window opened again after a mix), [Jewels](protocol-097.md#jewels), and
+  the packets `30`..`34`, `81`..`83`, `86`, `87`, `F3 14` both ways, `2A`, `26` with a jewel. All from code. The buy and
+  mix results carry no money, `22 FE` does.
+- NPCs (`npc.py`): section 0 of the spawn file, the types this client has (`monster.NPC_TYPES`), at their spot and
+  direction in the monsters' ids, `Monster.attackable` keeps them out of hits, skills and summons. Traps hit the
+  nearest player within their attack range (0: on them) at their attack speed. One window per connection
+  (`c.window`), talking within 5 tiles; closed by `31` / `82` / `87`, another talk, farther than 5 tiles, death, a
+  relocate (`82` / `87` tell the client) and leaving the game. NPCs without a window yet (guards, Sevina, Charon, the
+  guild master) answer nothing.
+- Shops (`shop.py`): `data/shop` is the later server's files, filtered to this client's items (and no +3 arrows /
+  bolts); Hanzo's goods aren't in this client, he sells Leah's beginner weapons and the first shields (mup's). Goods
+  placed in file order. Buy, sell and repair at the client's prices (its float steps included), `22 FE` then `32`,
+  `33` with the money, `2A` per repaired item then `34`. Money capped at 2 000 000 000.
+- Wear (`item.wear`, `combat.py`): weapons by the defense they hit (`defense * 2 / (min damage * 3 / 2)`, a point at
+  more than 564, bows 780, staffs on wizard skills 1050), a random piece of armor or the shield by the damage taken
+  (`damage * 2 / (defense * 3 / 2)`, 69): the later servers' shape, mup's numbers, not stored. `2A` and the values
+  again for each point lost (nothing from an item at 0, M4). `item.max_durability` is now the tooltip's.
+- Warehouse (`warehouse.py`): per account, loaded on the first open of the connection, `24` with window 2,
+  `81` (at most 100 000 000 zen stored, usual), saved with the character in one transaction (owner `warehouse`,
+  `warehouses.zen`) on close, logout and autosave.
+- Jewels (`jewel.py`): bless +1 up to +6, soul 50% (+25% luck) up to +9, a failure from +7 to +0 and below one level
+  down, life + 1 option step up to +16 (the highest the client prices) at 50%, a failure removes it. Full durability
+  after. `F3 14` and `28`, refused: `F3 14` puts the jewel back, `26 FD`.
+- Chaos machine (`chaos.py`): the client's recognition ported, rates and zen from `data/ChaosMix.txt` (`[world]
+  mixes`, -1 the client's own). Chaos weapon mix: a chaos weapon of level 0..4 (2/6, 4/6, 5/7) or the first wings
+  when a chaos weapon was mixed, skill / luck / option by the rate; failed: jewels gone, the rest loses levels. +10,
+  +11 and the dinorant: the item up a level / a new horn, failed: all gone. `22 FE`, `86`, `31` 3 after a failure.
+  The Devil Square invitation is refused until M7. Migration 4 adds the item owner `chaos`: the box is stored with
+  the character, what is left in it goes back into the inventory when the window closes and on entering, `31` 3
+  shows the client what stayed (or clears what it may still show).
+- Test: Amy in view (13) and her goods (31), a swing and a skill on her doing nothing, a potion bought (`22 FE`,
+  `32`) and sold (`33`), refused buys (no money, no 2 x 2 room), the sword's `2A` on the golem and its repair at
+  Hanzo's (`2A`, `34` with the cost by the formula), the rapier and 1000 zen into the vault, stored with the account,
+  taken out by Elfa after a restart, a jewel of bless (+1) and one refused, a certain +10 mix, walking away closing
+  the window (`82`), a trap hit.
+- Left: Devil Square (Charon, the invitation mix), guild master, quests and the server division dialog (M7), the vault
+  lock (`83`), stacking potions.
 
 ## M6 social: whisper, party, trade
 

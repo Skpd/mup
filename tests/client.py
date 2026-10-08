@@ -42,6 +42,7 @@ autosave_interval = 2
 monster_info = {monsters}
 monster_spawns = {spawns}
 item_drops = {drops}
+mixes = {mixes}
 [accounts]
 personal_code = {code}
 [log]
@@ -50,13 +51,20 @@ log_packets = yes
 """
 # test monsters, Monster.txt columns: index rate name level life mana damage_min damage_max defense magic_defense
 # attack_rate defense_rate move_range attack_type attack_range view_range move_speed attack_speed regen_time ...
-# The dragon and the hound always hit (attack rate 1000), nothing misses the spider (defense rate 0)
+# The dragon and the hound always hit (attack rate 1000), nothing misses the spider (defense rate 0). The golem's
+# defense 2000 wears a weapon fast, the trap (attack range 0) hits who stands on it, the NPCs only need to exist
 MONSTERS = """
 2 1 "Budge Dragon" 4 5 0 1 1 0 0 1000 0 0 0 1 5 300 500 10 2 0 0 0 0 0 0 0 0
 3 1 "Spider" 2 100 0 4 7 0 0 0 0 0 0 1 0 400 1800 1 2 0 0 0 0 0 0 0 0
 5 1 "Hell Hound" 38 1400 0 500 500 0 0 1000 0 0 0 1 5 300 500 10 2 0 0 0 0 0 0 0 0
 26 1 "Goblin" 3 1000 0 1 1 0 0 0 0 0 0 1 0 400 1800 10 2 0 0 0 0 0 0 0 0
 7 1 "Dodger" 3 1000 0 1 1 0 0 0 100000 0 0 1 0 400 1800 10 2 0 0 0 0 0 0 0 0
+28 1 "Golem" 3 100000 0 1 1 2000 0 0 0 0 0 1 0 400 1800 10 2 0 0 0 0 0 0 0 0
+101 1 "Iron Stick" 1 1000 0 2 2 0 0 1000 0 0 0 0 1 500 500 3 1 0 0 0 0 0 0 0 0
+238 1 "Chaos Goblin" 2 50 0 15 30 70 20 10 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0
+240 1 "Safety Guardian" 2 50 0 15 30 70 20 10 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0
+251 1 "Hanzo the Blacksmith" 20 1000 0 15 30 70 20 100 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0
+253 1 "Potion Girl Amy" 2 50 0 15 30 70 20 10 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0
 end
 """
 # MonsterSetBase single monsters (type, map, leash, x, y, direction), each appears within 3 tiles of its spot:
@@ -67,7 +75,18 @@ SPIDER_SPOT = (182, 126)
 DRAGON_SPOT = (200, 100)
 HOUND_SPOT = (90, 128)
 GOBLIN_SPOT = (190, 140)
+GOLEM_SPOT = (210, 160)
+# NPCs (section 0: type, map, range, x, y, direction) in Lorencia's town north of the start area, the trap outside
+AMY, HANZO, VAULT_KEEPER, CHAOS_GOBLIN = (253, (142, 114)), (251, (145, 114)), (240, (148, 114)), (238, (151, 114))
+TRAP_SPOT = (200, 145)
 SPAWNS = """
+0
+253 00 00 {} {} 03
+251 00 00 {} {} 03
+240 00 00 {} {} 03
+238 00 00 {} {} 03
+101 00 00 {} {} 01
+end
 2
 003 00 30 {} {} -1
 002 00 30 {} {} -1
@@ -75,8 +94,17 @@ SPAWNS = """
 026 00 30 {} {} -1
 026 00 30 {} {} -1
 007 00 30 {} {} -1
+028 00 30 {} {} -1
 end
-""".format(*SPIDER_SPOT, *DRAGON_SPOT, *HOUND_SPOT, *GOBLIN_SPOT, *GOBLIN_SPOT, *GOBLIN_SPOT)
+""".format(*AMY[1], *HANZO[1], *VAULT_KEEPER[1], *CHAOS_GOBLIN[1], *TRAP_SPOT, *SPIDER_SPOT, *DRAGON_SPOT,
+           *HOUND_SPOT, *GOBLIN_SPOT, *GOBLIN_SPOT, *GOBLIN_SPOT, *GOLEM_SPOT)
+# chaos machine mixes (name, rate %, zen, luck %): the +10 mix is certain, the others as the client shows them
+MIXES = """
+chaos -1 -1 0
+plus10 100 2000000 0
+plus11 45 4000000 25
+dinorant 70 250000 0
+"""
 
 # fixed drops (monster type, item group, index, level, count, chance): every spider leaves a short sword, a small
 # healing potion and 30 zen. The test monsters have no random drops (ItemRate, MoneyRate 0)
@@ -312,6 +340,63 @@ def move_item(conn, source, item, target):
     p = conn.recv_until(key(0x24), what='move result')
     check(p.encrypted and len(p) == 9, 'move result is C3, 9 bytes: ' + p.hex(' '))
     return p
+
+
+def move_between(conn, source_window, source, item, target_window, target):
+    """C3 24 between windows (0 inventory, 2 warehouse, 3 chaos machine), returns the C3 24 result."""
+    conn.send([0xC1, 0, 0x24, source_window, source, *item, target_window, target], encrypt=True)
+    p = conn.recv_until(key(0x24), what='move result')
+    check(p.encrypted and len(p) == 9, 'move result is C3, 9 bytes: ' + p.hex(' '))
+    return p
+
+
+def le32(data):
+    return struct.unpack('<I', bytes(data))[0]
+
+
+def be32(data):
+    return struct.unpack('>I', bytes(data))[0]
+
+
+def item_list(p):
+    """[4] kind and slot -> item bytes of a 31 list: C2, [5] count, 5 bytes per item from [6]."""
+    check(p[0] == 0xC2 and len(p) == 6 + 5 * p[5], '31 is C2, 5 bytes per item: ' + p.hex(' '))
+    return p[4], {p[6 + i * 5]: bytes(p[7 + i * 5:11 + i * 5]) for i in range(p[5])}
+
+
+def gm_move(conn, name, map_id, x, y):
+    """GM /move, waits for the 1C and the notice."""
+    conn.inbox.clear()
+    conn.send(chat(name, '/move {} {} {}'.format(map_id, x, y)))
+    conn.recv_until(key(0x1C), what='GM move')
+    conn.recv_until(key(0x0D), what='move notice')
+
+
+def give(conn, name, *args):
+    """GM /item: the slot the item went to (the notice ends with it) and its bytes (from the F3 10 before)."""
+    conn.send(chat(name, '/item ' + ' '.join(str(a) for a in args)))
+    items_now = inventory(conn)
+    slot = int(text(conn.recv_until(key(0x0D), what='item notice')[4:]).rsplit(' ', 1)[1])
+    return slot, items_now[slot]
+
+
+def npc_entry(conn, monster_type):
+    """The 13 entry of the first NPC / monster of a type conn is shown."""
+    p = conn.recv_until(lambda p: p.head == 0x13 and any(e[2] == monster_type for e in entries(p)),
+                        what='monster type {}'.format(monster_type))
+    return next(e for e in entries(p) if e[2] == monster_type)
+
+
+def talk(conn, cid):
+    """C3 30 talk, returns the C3 30 answer."""
+    conn.send([0xC1, 0, 0x30, cid >> 8, cid & 0xFF], encrypt=True)
+    p = conn.recv_until(key(0x30), what='talk answer')
+    check(p.encrypted and len(p) == 8, 'the talk answer is C3, 8 bytes: ' + p.hex(' '))
+    return p
+
+
+def cid_of(e):
+    return (e[0] << 8 | e[1]) & 0x7FFF
 
 
 def exp16(p):
@@ -1193,6 +1278,236 @@ def gates(t):
     chat_round_trip(a, 'Alice')
 
 
+def npcs(t):
+    """NPCs stand in view, talking opens their window, nobody hits them."""
+    a = t.a
+    print('NPCs: Amy the potion girl in Lorencia\'s town')
+    gm_move(a, 'Alice', 0, AMY[1][0], AMY[1][1] + 1)
+    e = npc_entry(a, AMY[0])
+    amy = cid_of(e)
+    check((e[6], e[7]) == AMY[1] and e[10] == 3 << 4, 'A sees Amy (13, type 253) at her spot facing 3: ' + e.hex(' '))
+    a.send([0xC1, 0, 0x15, amy >> 8, amy & 0xFF, 0x64, 0x01])
+    a.send([0xC1, 0, 0x19, 0x00, amy >> 8, amy & 0xFF], encrypt=True)
+    chat_round_trip(a, 'Alice')
+    check(not any(of(0x15, amy)(p) for p in a.inbox), 'a swing and a skill at her do nothing')
+    p = talk(a, amy)
+    check(p[3] == 0, 'talking to her opens the shop window: C3 30 [3] 0')
+    kind, goods = item_list(a.recv_until(key(0x31), what='shop goods'))
+    check(kind == 0 and goods[0] == bytes([0xC0, 0, 1, 0x80]) and goods[1] == POTION,
+          'her goods (31 [4] 0): an apple in slot 0, a small healing potion in slot 1, {} items'.format(len(goods)))
+    t.amy = amy
+
+
+def shops(t):
+    """Buying and selling at the client's prices, refused buys, wear and repair."""
+    a, b3 = t.a, t.b3
+    print('buying and selling')
+    a.send(chat('Alice', '/zen 10000'))
+    a.recv_until(key(0xF3, 0x04), what='zen refresh')
+    a.recv_until(key(0x0D), what='zen notice')
+    talk(a, t.amy)
+    a.recv_until(key(0x31), what='shop goods')
+    a.send([0xC1, 0, 0x32, 1], encrypt=True)
+    p = a.recv_until(key(0x22), what='money')
+    # the client's price of a potion: item.bmd value 10, 10 * 10 * 10 / 12 = 83 a piece
+    check(p[3] == 0xFE and be32(p[4:8]) == 10000 - 83, 'A buys the small healing potion for 83: 22 FE with the money '
+          'left, big endian: ' + p.hex(' '))
+    p = a.recv_until(key(0x32), what='buy result')
+    slot = p[3]
+    check(len(p) == 8 and slot >= 12 and bytes(p[4:8]) == POTION,
+          '32: it goes into slot {}: '.format(slot) + p.hex(' '))
+    a.send([0xC1, 0, 0x33, slot], encrypt=True)
+    p = a.recv_until(key(0x33), what='sell result')
+    t.a_money = 10000 - 83 + 27
+    check(len(p) == 8 and p[3] == 1 and le32(p[4:8]) == t.a_money, 'she sells it back for a third, 27: 33 [3] 1, the '
+          'money at 4: ' + p.hex(' '))
+    a.send([0xC1, 0, 0x32, 1], encrypt=True)
+    a.recv_until(key(0x32), what='another potion')
+
+    print('B can\'t pay')
+    gm_move(b3, 'Bobby', 0, AMY[1][0] + 1, AMY[1][1] + 1)
+    talk(b3, t.amy)
+    b3.recv_until(key(0x31), what='shop goods')
+    b3.send([0xC1, 0, 0x32, 3], encrypt=True)
+    p = b3.recv_until(key(0x32), what='refused buy')
+    check(p[3] == 0xFF, 'B with 30 zen can\'t buy the large healing potion for 750: 32 FF')
+
+    print('wear: B\'s sword on the golem, repair at Hanzo\'s')
+    gm_move(b3, 'Bobby', 0, GOLEM_SPOT[0], GOLEM_SPOT[1] - 4)
+    e = npc_entry(b3, 28)
+    golem = cid_of(e)
+    gm_move(b3, 'Bobby', 0, *near_tile((e[6], e[7]), 1))
+    b3.send([0xC1, 0, 0x15, golem >> 8, golem & 0xFF, 0x64, 0x01])
+    p = b3.recv_until(key(0x2A), what='durability')
+    # the golem's defense 2000: 2000 * 2 / (3 + 3 / 2) = 1000 wear, a point at more than 564
+    check(len(p) == 6 and (p[3], p[4], p[5]) == (0, 21, 0), 'a hit takes a point of the short sword (22): 2A slot 0, '
+          '21, no unlock: ' + p.hex(' '))
+    gm_move(b3, 'Bobby', 0, HANZO[1][0], HANZO[1][1] + 1)
+    hanzo = cid_of(npc_entry(b3, HANZO[0]))
+    talk(b3, hanzo)
+    b3.recv_until(key(0x31), what='Hanzo\'s goods')
+    b3.send([0xC1, 0, 0x34, 0, 0], encrypt=True)
+    p = b3.recv_until(key(0x2A), what='repaired')
+    check((p[3], p[4]) == (0, 22), 'Hanzo repairs the sword: 2A slot 0, 22 again')
+    # a third of the short sword's price (drop level 3, one-handed: ((3 + 40) * 3² / 8 + 100) * 80%) for the base,
+    # 3 * base^0.75 * worn + 1
+    base = ((3 + 40) * 3 * 3 // 8 + 100) * 80 // 100 // 3
+    cost = int(3 * base ** 0.75 * (1 - 21 / 22) + 1)
+    p = b3.recv_until(key(0x34), what='repair result')
+    check(len(p) == 8 and le32(p[4:8]) == 30 - cost, 'for {} zen: 34, the money at 4: {}'.format(cost, p.hex(' ')))
+    b3.send([0xC1, 0, 0x34, 0xFF, 0], encrypt=True)
+    chat_round_trip(b3, 'Bobby')
+    check(not any(p.head in (0x2A, 0x34) for p in b3.inbox), 'repairing all with nothing worn: no answer')
+
+
+def vault(t):
+    """The warehouse: A stores an item and zen, after a restart another character of the account takes them."""
+    a, b3, servers, db_path = t.a, t.b3, t.servers, t.db_path
+    print('the vault: A stores a rapier and zen')
+    gm_move(a, 'Alice', 0, VAULT_KEEPER[1][0], VAULT_KEEPER[1][1] + 1)
+    keeper = cid_of(npc_entry(a, VAULT_KEEPER[0]))
+    p = talk(a, keeper)
+    check(p[3] == 2, 'the vault keeper opens the vault: C3 30 [3] 2')
+    kind, stored = item_list(a.recv_until(key(0x31), what='vault items'))
+    check(kind != 3 and stored == {}, 'an empty vault (31)')
+    p = a.recv_until(key(0x81), what='vault zen')
+    check(len(p) == 12 and p[3] == 1 and (le32(p[4:8]), le32(p[8:12])) == (0, t.a_money - 83),
+          '81: no zen in it at 4, her money at 8: ' + p.hex(' '))
+    money = t.a_money - 83
+    slot, rapier = give(a, 'Alice', 0, 2)
+    p = move_between(a, 0, slot, rapier, 2, 0)
+    check((p[3], p[4]) == (2, 0) and bytes(p[5:9]) == rapier, 'the rapier goes into the vault: 24 window 2 slot 0')
+    a.send([0xC1, 0, 0x81, 0, *struct.pack('<I', 1000)])
+    p = a.recv_until(key(0x81), what='deposit')
+    check((p[3], le32(p[4:8]), le32(p[8:12])) == (1, 1000, money - 1000), '81 0 1000 puts 1000 zen in it')
+    a.send([0xC1, 0, 0x81, 1, *struct.pack('<I', 5000)])
+    p = a.recv_until(key(0x81), what='withdraw')
+    check((p[3], le32(p[4:8])) == (0, 1000), 'taking out 5000 is refused: 81 [3] 0')
+    a.send([0xC1, 0, 0x82])
+    chat_round_trip(a, 'Alice')
+    with sqlite3.connect(db_path) as db:
+        account = db.execute("SELECT id FROM accounts WHERE name = 'alice'").fetchone()[0]
+        row = db.execute("SELECT character_id, account_id, slot, type FROM items WHERE owner = 'warehouse'").fetchone()
+        zen = db.execute('SELECT zen FROM warehouses WHERE account_id = ?', (account,)).fetchone()[0]
+    check(row == (None, account, 0, 2) and zen == 1000,
+          'closing (82) saved it, with the account: {} {}'.format(row, zen))
+
+    print('restart, Elfa takes them out')
+    servers['bin/gs.py'].stop()
+    a.s.close()
+    b3.s.close()
+    servers['bin/gs.py'].start()
+    a = login_ok('alice', 'pw1')
+    enter(a, 'Elfa')
+    gm_move(a, 'Elfa', 0, VAULT_KEEPER[1][0], VAULT_KEEPER[1][1] + 1)
+    keeper = cid_of(npc_entry(a, VAULT_KEEPER[0]))
+    talk(a, keeper)
+    kind, stored = item_list(a.recv_until(key(0x31), what='vault items'))
+    check(stored == {0: rapier}, 'the rapier is in the vault of the account')
+    p = a.recv_until(key(0x81), what='vault zen')
+    elfa_money = le32(p[8:12])
+    check(le32(p[4:8]) == 1000, 'with the 1000 zen')
+    p = move_between(a, 2, 0, rapier, 0, 12)
+    check((p[3], p[4]) == (0, 12), 'Elfa takes the rapier into slot 12')
+    a.send([0xC1, 0, 0x81, 1, *struct.pack('<I', 400)])
+    p = a.recv_until(key(0x81), what='withdraw')
+    check((p[3], le32(p[4:8]), le32(p[8:12])) == (1, 600, elfa_money + 400), 'and 400 zen: 81 1 400')
+    a.send([0xC1, 0, 0x82])
+    check(logout(a, 1)[4] == 1, 'Elfa goes to character select')
+    with sqlite3.connect(db_path) as db:
+        rows = db.execute("SELECT owner, slot FROM items WHERE type = 2").fetchall()
+        zen = db.execute('SELECT zen FROM warehouses').fetchone()[0]
+    check(rows == [('inventory', 12)] and zen == 600, 'stored once, in her inventory, 600 zen left: {}'.format(rows))
+    enter(a, 'Alice')
+    t.a = a
+
+
+def jewels(t):
+    """A jewel of bless on an item, one refused."""
+    a = t.a
+    print('a jewel of bless')
+    bless_slot, _ = give(a, 'Alice', 14, 13)
+    sword_slot, _ = give(a, 'Alice', 0, 1)
+    a.send([0xC1, 0, 0x26, bless_slot, sword_slot], encrypt=True)
+    p = a.recv_until(key(0xF3, 0x14), what='item changed')
+    check(len(p) == 9 and p[4] == sword_slot and p[5] == 0x01 and p[6] >> 3 & 0x0F == 1,
+          'on the short sword: F3 14 with it +1 in slot {}: {}'.format(sword_slot, p.hex(' ')))
+    p = a.recv_until(key(0x28), what='jewel used')
+    check((p[3], p[4]) == (bless_slot, 1), 'the jewel is gone: 28 slot {}, unlocks item use'.format(bless_slot))
+    bless_slot, bless = give(a, 'Alice', 14, 13)
+    sword_slot, _ = give(a, 'Alice', 0, 1, 6)
+    a.send([0xC1, 0, 0x26, bless_slot, sword_slot], encrypt=True)
+    p = a.recv_until(key(0xF3, 0x14), what='jewel back')
+    check(p[4] == bless_slot and bytes(p[5:9]) == bless, 'a +6 takes no bless: F3 14 puts the jewel back')
+    p = a.recv_until(key(0x26), what='unlock')
+    check(p[3] == 0xFD, '26 FD unlocks item use')
+
+
+def chaos_machine(t):
+    """A certain +10 mix (the test's mix file)."""
+    a = t.a
+    print('chaos machine: +9 short sword, jewels of chaos, bless and soul')
+    a.send(chat('Alice', '/zen 3000000'))
+    a.recv_until(key(0xF3, 0x04), what='zen refresh')
+    a.recv_until(key(0x0D), what='zen notice')
+    parts = [give(a, 'Alice', 0, 1, 9), give(a, 'Alice', 12, 15), give(a, 'Alice', 14, 13), give(a, 'Alice', 14, 14)]
+    gm_move(a, 'Alice', 0, CHAOS_GOBLIN[1][0], CHAOS_GOBLIN[1][1] + 1)
+    goblin = cid_of(npc_entry(a, CHAOS_GOBLIN[0]))
+    p = talk(a, goblin)
+    check(p[3] == 3 and bytes(p[4:8]) == bytes([80, 75, 70, 60]),
+          'the chaos goblin opens the machine: C3 30 [3] 3, the invitation rates at 4: ' + p.hex(' '))
+    for box_slot, (slot, item) in enumerate(parts):
+        p = move_between(a, 0, slot, item, 3, box_slot)
+        check((p[3], p[4]) == (3, box_slot), 'into the box: 24 window 3 slot {}'.format(box_slot))
+    a.send([0xC1, 0, 0x86])
+    p = a.recv_until(key(0x22), what='mix zen')
+    check(p[3] == 0xFE and be32(p[4:8]) == 1000000, 'the mix takes 2 000 000 zen: 22 FE')
+    p = a.recv_until(key(0x86), what='mix result')
+    result = bytes(p[4:8])
+    check(len(p) == 8 and p[3] == 1 and result[0] == 0x01 and result[1] >> 3 & 0x0F == 10,
+          '86 [3] 1: the sword is +10, alone in the box: ' + p.hex(' '))
+    p = move_between(a, 3, 0, result, 0, parts[0][0])
+    check((p[3], p[4]) == (0, parts[0][0]), 'A takes it out')
+    a.send([0xC1, 0, 0x87])
+    chat_round_trip(a, 'Alice')
+
+
+def windows(t):
+    """Walking away closes a window, a trap, no room for what is bought."""
+    a = t.a
+    print('walking away from Amy closes her window')
+    gm_move(a, 'Alice', 0, AMY[1][0], AMY[1][1] + 1)
+    amy = cid_of(npc_entry(a, AMY[0]))
+    talk(a, amy)
+    a.send(walk(AMY[1][0], AMY[1][1] + 1, [3] * 8, 3))
+    p = a.recv_until(key(0x82), what='window closed')
+    check(len(p) == 3, '8 tiles from her the server closes it: 82')
+    a.send([0xC1, 0, 0x32, 1], encrypt=True)
+    check(a.recv_until(key(0x32), what='buy')[3] == 0xFF, 'no buying then: 32 FF')
+
+    print('a trap')
+    gm_move(a, 'Alice', 0, *TRAP_SPOT)
+    p = a.recv_until(lambda p: of(0x15, a.cid)(p) and damage(p) > 0, timeout=4, what='trap hit')
+    check(True, 'the iron stick hits A standing on it: {}'.format(damage(p)))
+
+    print('no room')
+    gm_move(a, 'Alice', 0, HANZO[1][0], HANZO[1][1] + 1)
+    hanzo = cid_of(npc_entry(a, HANZO[0]))
+    helms = 0
+    while True:
+        a.send(chat('Alice', '/item 7 2'))  # pad helms, 2 x 2
+        if text(a.recv_until(key(0x0D), what='item notice')[4:]).startswith('no room'):
+            break
+        helms += 1
+    a.inbox.clear()
+    talk(a, hanzo)
+    kind, goods = item_list(a.recv_until(key(0x31), what='Hanzo\'s goods'))
+    shield = next(s for s, i in goods.items() if i[0] == 0xC0 and i[3] & 0x80 == 0)  # 6/0, the round shield
+    a.send([0xC1, 0, 0x32, shield], encrypt=True)
+    check(a.recv_until(key(0x32), what='buy')[3] == 0xFF, 'after {} pad helms no 2 x 2 spot is left, the round shield '
+          'is refused: 32 FF'.format(helms))
+
+
 def play(servers, db_path):
     """The test, area by area. t carries the clients and what one area leaves for the next."""
     t = SimpleNamespace(servers=servers, db_path=db_path)
@@ -1205,6 +1520,12 @@ def play(servers, db_path):
     skills(t)
     monsters(t)
     gates(t)
+    npcs(t)
+    shops(t)
+    vault(t)
+    jewels(t)
+    chaos_machine(t)
+    windows(t)
 
 def port_open(port):
     try:
@@ -1250,11 +1571,13 @@ def main():
     monsters = os.path.join(tmp.name, 'Monster.txt')
     spawns = os.path.join(tmp.name, 'MonsterSetBase.txt')
     drops = os.path.join(tmp.name, 'ItemDrop.txt')
+    mixes = os.path.join(tmp.name, 'ChaosMix.txt')
     Path(monsters).write_text(MONSTERS)
     Path(spawns).write_text(SPAWNS)
     Path(drops).write_text(DROPS)
+    Path(mixes).write_text(MIXES)
     Path(config).write_text(CONFIG.format(cs_port=CS_PORT, gs_port=GS_PORT, host=HOST, db=db_path, monsters=monsters,
-                                          spawns=spawns, drops=drops, code=PERSONAL_CODE))
+                                          spawns=spawns, drops=drops, mixes=mixes, code=PERSONAL_CODE))
     servers = {script: Server(script, port, config) for script, port in (('bin/cs.py', CS_PORT), ('bin/gs.py', GS_PORT))}
     try:
         for s in servers.values():
