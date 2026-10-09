@@ -117,6 +117,30 @@ def spawn(game, mob, now):
     return True
 
 
+def place(game, mob, x, y, life, home, now):
+    """Puts mob alive at x, y of its map with life, home its spawn spot: a saved situation played again (mup.sim). It
+    looks around anew."""
+    m = game.maps[mob.map_id]
+    if mob.dead:
+        game.dead_monsters.discard(mob)
+        mob.x, mob.y = x, y
+        m.add_monster(mob)
+    else:
+        m.move_monster(mob, x, y)
+    mob.dead = False
+    mob.life = life
+    mob.home = home
+    mob.effects.clear()
+    mob.state = 0
+    mob.target = None
+    mob.damage_by = {}
+    mob.returning = False
+    mob.path = []
+    mob.respawn_at = None
+    mob.next_think_at = mob.next_attack_at = mob.next_step_at = now
+    view.monster_moved(game, mob)
+
+
 def kill(game, mob, now):
     """mob died: it stays in view as a corpse until it respawns."""
     mob.dead = True

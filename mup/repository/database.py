@@ -181,6 +181,17 @@ MIGRATIONS = [
     """
     ALTER TABLE characters ADD COLUMN pk_time REAL NOT NULL DEFAULT 0;
     """,
+    # roadmap B0: characters the server plays (mup.bot), on accounts nobody logs in to. Personality and career state
+    # are JSON, the seed starts the bot's own random draws
+    """
+    CREATE TABLE bots (
+        character_id INTEGER PRIMARY KEY REFERENCES characters (id) ON DELETE CASCADE,
+        seed INTEGER NOT NULL,
+        personality TEXT NOT NULL DEFAULT '{}',
+        career TEXT NOT NULL DEFAULT '{}',
+        schedule TEXT NOT NULL DEFAULT ''
+    );
+    """,
 ]
 
 

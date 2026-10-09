@@ -1,26 +1,26 @@
 import logging
 from mup.packet.client import CMagicAttack, CMagicAOE, CAreaHits
 from mup.server import casting
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 
 logger = logging.getLogger(__name__)
 
 
-def magic_attack_handler(msg: CMagicAttack, proto: BaseProtocol):
+def magic_attack_handler(msg: CMagicAttack, proto: Session):
     if proto.player is None:
         return
     logger.debug('%s: skill list index %s on %s', proto.player.name, msg.skill_index, msg.target_cid)
     casting.on_target(proto.server, proto, msg.skill_index, msg.target_cid)
 
 
-def aoe_magic_handler(msg: CMagicAOE, proto: BaseProtocol):
+def aoe_magic_handler(msg: CMagicAOE, proto: Session):
     if proto.player is None:
         return
     logger.debug('%s: area skill list index %s at %s,%s', proto.player.name, msg.skill_index, msg.x, msg.y)
     casting.on_area(proto.server, proto, msg.skill_index, msg.x, msg.y, msg.direction)
 
 
-def area_hits_handler(msg: CAreaHits, proto: BaseProtocol):
+def area_hits_handler(msg: CAreaHits, proto: Session):
     if proto.player is None:
         return
     cids = [e['cid'] for e in msg.entries]

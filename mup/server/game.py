@@ -26,6 +26,21 @@ QUEST_PATH = 'data/Quest.bmd'  # the client's
 TICK = 0.1  # seconds between game ticks
 
 
+class Clock:
+    """The server's time: the game clock is the event loop's, the wall clock is for schedules and logs. A simulation
+    (mup.sim) has its own."""
+
+    def __init__(self, loop):
+        self.loop = loop
+
+    def now(self):
+        return self.loop.time()
+
+    @staticmethod
+    def wall():
+        return time.time()
+
+
 class GameServer(ServerBase):
     """
     The game: connections by cid, maps with the players, monsters and ground items on them. Packets are handled as
@@ -34,9 +49,10 @@ class GameServer(ServerBase):
     """
     first_player_cid = 4800  # monsters take the lower ids
 
-    def __init__(self, loop, config: Config):
+    def __init__(self, loop, config: Config, clock=None):
         super().__init__()
         self.loop = loop
+        self.clock = clock or Clock(loop)
         self.config = config
         self.cids = count(self.first_player_cid)
 
@@ -85,13 +101,20 @@ class GameServer(ServerBase):
                     len(self.fixed_drops), len(self.shops))
 
         self.parties = set()  # mup.server.party.Party
+        self.party_numbers = count(1)
+        self.bots = None  # mup.bot.manager.BotManager when bots play
         self.next_save = now + config.autosave_interval
         self.task = None
 
     @property
     def now(self):
         """The game clock, seconds."""
-        return self.loop.time()
+        return self.clock.now()
+
+    @property
+    def wall_time(self):
+        """The wall clock, seconds since the epoch: schedules of the day, what is stored with a date."""
+        return self.clock.wall()
 
     def start(self):
         self.task = self.loop.create_task(self.run())
@@ -110,8 +133,10 @@ class GameServer(ServerBase):
             await asyncio.sleep(delay)
 
     def tick(self, now):
-        """One step of the game: monsters near players act, the dead come back, regeneration, ground items go away,
-        autosave."""
+        """One step of the game: the bots act on what they were shown, monsters near players act, the dead come back,
+        regeneration, ground items go away, autosave."""
+        if self.bots is not None:
+            self._run(self.bots.tick, now)
         for m in self.maps.values():
             if len(m.players):
                 self._run(ai.tick, self, m, now)
@@ -258,6 +283,7 @@ class GameServer(ServerBase):
         logged, the game goes on."""
         try:
             self.characters.save(c.player, c.warehouse)
+            c.saved()
         except Exception:
             logger.exception('Failed to save %s', c.player.name)
 
@@ -266,7 +292,7 @@ class GameServer(ServerBase):
         (connection, the zen it gave, the items it gave). A failed write is logged, the game goes on."""
         try:
             self.characters.save_trade(*[(c.player, c.warehouse, zen, items) for c, zen, items in (a, b)],
-                                       time=time.time())
+                                       time=self.wall_time)
         except Exception:
             logger.exception('Failed to save the trade of %s and %s', a[0].player.name, b[0].player.name)
 

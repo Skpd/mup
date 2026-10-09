@@ -24,8 +24,13 @@ CHAT = '~'
 class Party:
     """members: connections, the leader first, in the order of the client's list."""
     members: List[object] = field(default_factory=list)
+    number: int = 0  # GameServer.party_numbers
     next_update: float = 0.0
     shown: tuple = ()  # what the last 42 showed
+
+    def __hash__(self):
+        # by number, so the game's parties iterate in the same order on every run (docs/bots.md, S0)
+        return self.number
 
     @property
     def leader(self):
@@ -84,7 +89,7 @@ def answer(game, c, yes, cid):
         c.write(SPartyResult(result=result))
         return
     if party is None:
-        party = asker.party = Party([asker])
+        party = asker.party = Party([asker], next(game.party_numbers))
         game.parties.add(party)
     party.members.append(c)
     c.party = party

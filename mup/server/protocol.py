@@ -3,55 +3,26 @@ from asyncio import Protocol
 from asyncio.transports import Transport
 from mup.common.crypt import Crypt
 from mup.config import PACKET_LOGGER
-from mup.model.account import Account
-from mup.model.player import Player
 from mup.packet.base import Base
-from mup.packet.client import factory
-from mup.server.game import GameServer
+from mup.server.session import Session
 
 logger = logging.getLogger(__name__)
 packet_logger = logging.getLogger(PACKET_LOGGER)
 
 
-class BaseProtocol(Protocol):
+class BaseProtocol(Protocol, Session):
+    """A client over the network: framing, crypto and the packet log, the packets go to the server's handlers."""
     transport: Transport
-    server: GameServer
     crypt: Crypt
-    player: Player = None
-    acc: Account = None
 
-    cid = None
     peer = None
-    connected = False
-    joined = False
-    playing = False
-    server_tick = None
-    client_tick = None
-    reported_speeds = None  # attack and magic speed of the last ping
-    view = None  # players, monsters and ground items this client has in view (mup.server.view)
 
-    def __init__(self, gs):
+    def __init__(self, server):
+        Session.__init__(self, server)
         self.crypt = Crypt(decode_keys='data/Dec1.dat', encode_keys='data/Enc2.dat')
         # self.crypt = Crypt(decode_keys='/tmp/server065/data/Dec1.dat', encode_keys='/tmp/server065/data/Enc2.dat')
-        self.server = gs
         self.buffer = bytearray()
         self.logger = logger
-        self.view = set()
-        self.area_casts = {}  # skill number -> mup.server.casting.AreaCast
-        self.teleport_at = 0.0  # the next teleport is allowed then
-        self.left = None  # the character it logged out of
-        self.summon = None  # the player's summoned monster, mup.server.summon
-        self.window = None  # the NPC window open, mup.server.npc.Window
-        self.warehouse = None  # the account's vault once opened, saved with the character (mup.server.warehouse)
-        self.stale_box = False  # the client may still show items in its chaos machine box, mup.server.chaos
-        self.trade = None  # the trade asked for or open, mup.server.trade.Trade
-        self.party = None  # mup.server.party.Party
-        self.party_question = None  # (connection, time) of who asked to party last, mup.server.party
-        self.self_defense = {}  # connection -> until when its player may be hit back without a pk count, mup.server.pk
-        self.pk_clock = 0.0  # game clock of the last pk time update, mup.server.pk
-        self.guild = None  # mup.server.guild.Guild of the player in game
-        self.guild_question = None  # (connection, time) of who asked to join last, mup.server.guild
-        self.known_guilds = set()  # guild numbers the client was shown (5A), mup.server.view
 
     @property
     def tag(self):
@@ -86,17 +57,6 @@ class BaseProtocol(Protocol):
             what = self.crypt.encrypt(what)
             self.log_packet('!!>', what)
         self.transport.write(what)
-
-    def send_all(self, msg, except_self=True):
-        for c in self.server.connections.values():
-            if isinstance(c, BaseProtocol) and c.playing and (not except_self or c != self):
-                c.write(msg)
-
-    def send_same_map(self, msg, except_self=False):
-        ...
-
-    def send_near(self, msg, except_self=True):
-        ...
 
     def data_received(self, data):
         # tcp is a stream, a read can hold several packets or a part of one
@@ -139,14 +99,4 @@ class BaseProtocol(Protocol):
             self.crypt.extract(message, message[0] == 0xC2)
             self.log_packet('Extracted', message)
 
-        try:
-            packet = factory(message)
-
-            if packet and packet.key in self.server.handlers:
-                for c in self.server.handlers[packet.key]:
-                    c(packet, self)
-            else:
-                self.logger.warning('Unhandled packet %s', message.hex(' '))
-        except Exception:
-            # keep the connection, one broken handler shouldn't kick the player
-            self.logger.exception('Failed to handle %s', message.hex(' '))
+        self.server.dispatch(self, message)

@@ -33,6 +33,7 @@ class Config:
     devil_square_close: float = 10.0  # seconds the ranking shows before everyone goes back to Noria
     auto_create_accounts: bool = True  # the first login with an unknown account name creates it
     personal_code: str = '1111111'  # personal code of auto created accounts, deleting a character asks for it
+    bots_enabled: bool = False  # the bots (bin/account.py bot create) play while the game server runs
     log_level: str = 'INFO'
     log_packets: bool = False  # every packet in and out, at DEBUG
 

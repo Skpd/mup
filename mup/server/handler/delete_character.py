@@ -4,12 +4,12 @@ from mup.error import NotFoundError
 from mup.packet.client_packet.char_delete import CharDelete
 from mup.packet.server import SCharDeleted
 from mup.server import guild
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 
 logger = logging.getLogger(__name__)
 
 
-def delete_character_handler(msg: CharDelete, proto: BaseProtocol):
+def delete_character_handler(msg: CharDelete, proto: Session):
     if proto.acc is None or proto.playing:
         return
 

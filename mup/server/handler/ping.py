@@ -2,12 +2,12 @@ import logging
 from time import time
 
 from mup.packet.client import CPing
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 
 logger = logging.getLogger(__name__)
 
 
-def ping_handler(msg: CPing, proto: BaseProtocol):
+def ping_handler(msg: CPing, proto: Session):
     next_server_tick = time() * 1000
     next_client_tick = msg.tick
 

@@ -1,9 +1,9 @@
 from mup.packet.client import CCharList
 from mup.packet.server import SCharList
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 
 
-def char_list_handler(msg: CCharList, proto: BaseProtocol):
+def char_list_handler(msg: CCharList, proto: Session):
     if proto.acc is None:
         return
 

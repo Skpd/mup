@@ -1,10 +1,10 @@
 from mup.packet.client import CRotate
 from mup.packet.server import SAction
 from mup.server import view
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 
 
-def action_handler(msg: CRotate, proto: BaseProtocol):
+def action_handler(msg: CRotate, proto: Session):
     p = proto.player
     if p is None or p.dead:
         return

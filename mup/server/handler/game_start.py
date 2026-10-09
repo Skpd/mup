@@ -1,12 +1,12 @@
 import logging
 from mup.error import NotFoundError
 from mup.packet.client import CJoinGame
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 
 logger = logging.getLogger(__name__)
 
 
-def game_start_handler(msg: CJoinGame, proto: BaseProtocol):
+def game_start_handler(msg: CJoinGame, proto: Session):
     if proto.acc is None or proto.playing:
         return
 

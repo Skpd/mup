@@ -4,6 +4,7 @@ import hmac
 import os
 
 N, R, P = 2 ** 14, 8, 1
+NO_PASSWORD = '!'  # stored for accounts nobody logs in to (simulations, bots), check_password refuses it
 
 
 def hash_password(password):

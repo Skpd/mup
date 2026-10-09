@@ -2052,6 +2052,47 @@ def devil_square(t):
           p.hex(' '))
 
 
+# where B watches the bot hunt: the east exit of Lorencia, the spider and the dragon in view
+BOT_WATCH = (188, 112)
+
+
+def bots(t):
+    """A bot made with bin/account.py plays after the game server's last start with bots enabled: a client sees it
+    come, walk, swing and kill, its packets are in the packet log under its cid."""
+    b, servers = t.b, t.servers
+    gs = servers['bin/gs.py']
+    print('a bot hunts')
+    gs.stop()
+    b.s.close()
+    made = subprocess.run([sys.executable, 'bin/account.py', 'bot', 'create', 'Botty', 'dk', '--seed', '1'], cwd=ROOT,
+                          capture_output=True, text=True, env={**os.environ, 'MU_CONFIG': gs.config})
+    check(made.returncode == 0 and 'created bot Botty' in made.stdout, 'bin/account.py bot create: ' +
+          (made.stdout + made.stderr).strip())
+    with open(gs.config, 'a') as f:
+        f.write('[bots]\nbots_enabled = yes\n')
+    gs.start()
+    b = login_ok('bob', 'pw2')
+    enter(b, 'Bobby')
+    gm_move(b, 'Bobby', 0, *BOT_WATCH)
+
+    def players(p):
+        return [(e[0] << 8 | e[1]) & 0x7FFF for e in entries(p) if text(e[18:28]) == 'Botty']
+    p = b.recv_until(lambda p: p.head == 0x12 and players(p), timeout=30, what='the bot in view')
+    bot = players(p)[0]
+    check(True, 'B sees Botty (12, name at [+18..27]), cid {}'.format(bot))
+    p = b.recv_until(lambda p: p.head == 0x10 and (p[3] << 8 | p[4]) & 0x7FFF == bot, timeout=10, what='its walk')
+    check(True, 'it walks: 10 to {},{}'.format(p[5], p[6]))
+    p = b.recv_until(lambda p: p.head == 0x18 and (p[3] << 8 | p[4]) & 0x7FFF == bot and p[6] == 0x64, timeout=60,
+                     what='its swing')
+    check(True, 'it swings: 18 [6] 0x64 at {}'.format(p[7] << 8 | p[8]))
+    p = b.recv_until(lambda p: p.head == 0x17 and (p[6] << 8 | p[7]) & 0x7FFF == bot, timeout=60, what='its kill')
+    check(True, 'it kills monster {}: 17 with it at [6..7]'.format((p[3] << 8 | p[4]) & 0x7FFF))
+    gs.log.flush()
+    log = Path(gs.log.name).read_text(errors='replace')
+    check('Bot Botty enters the game' in log and ' {} < c1 07 15 '.format(bot) in log,
+          'the game server log has it entering and its 15 under its cid')
+
+
 def play(servers, db_path):
     """The test, area by area. t carries the clients and what one area leaves for the next."""
     t = SimpleNamespace(servers=servers, db_path=db_path)
@@ -2075,6 +2116,7 @@ def play(servers, db_path):
     quests(t)
     guilds(t)
     devil_square(t)
+    bots(t)
 
 def port_open(port):
     try:

@@ -1,6 +1,6 @@
 import logging
 from mup.packet.client import CMove
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 from mup.server.world import distance
 
 logger = logging.getLogger(__name__)
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 MAX_START_DISTANCE = 15
 
 
-def move_handler(msg: CMove, proto: BaseProtocol):
+def move_handler(msg: CMove, proto: Session):
     p = proto.player
     if p is None or p.dead:
         return

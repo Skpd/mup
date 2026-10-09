@@ -159,6 +159,31 @@ Steps (each leaves something that runs and is tested; after 4 is a stopping poin
 
 Maybe later: `tests/client.py`'s server on a faster clock (a config factor) to cut its 66 s of waiting.
 
+Done:
+- `Session` (`mup/server/session.py`) holds what the game keeps on a connection; `BaseProtocol` is the network one,
+  `Puppet` the in-process one. `ServerBase.dispatch`, `mup/server/handlers.py` (`bin/gs.py` calls `register`), the
+  handlers take a `Session`. The unused send helpers are gone.
+- `GameServer(loop, config, clock=None)`: `Clock` (the loop's time, `time.time()`), `now` and `wall_time`; Devil
+  Square's schedule and the trade log read `wall_time`. `Monster`, `GroundItem`, `Session` and `Party` (numbered by
+  `GameServer.party_numbers`) hash by number. `AccountRepository.create(name, None)` stores `!`.
+- `mup/sim.py`: `Sim(seed, start, **config)` (tick counted, so no float drift; game errors logged during a run raise
+  at the next `check`), `Sim.enter(name, class_type, at, level, cls)`, `Puppet` (`send`, `inbox`, `recv_until`,
+  `of(cls, **values)` predicates), `Hunter`, `Sim.digest`, `Sim.dump` / `Sim.load` (character row, skills, items, the
+  vault, the living monsters in view range; `monster.place` puts them back, the others in range die). `CMove.of`
+  builds walks.
+- Hunters taught something for B0's hunting grounds: monsters respawn anywhere in their spawn area (the east exit's 45
+  spiders share x 180..227, y 90..245), so hunters that stay within 20 tiles of where they started had killed
+  everything near after 30 game minutes and found nothing for hours. They roam now (within 64 tiles of home, out of
+  town first after a death).
+- `tests/sim.py` (tests/client.py's world, 2 s): repeatable (one digest twice, under another `PYTHONHASHSEED`, another
+  for another seed), a walk seen by another puppet, the hound's kill and the respawn 3.0 s later, a spider back after
+  its regen time, a drop the killer's for 10 s and gone after 60 s, regeneration, a Devil Square round from Charon to
+  Noria, a scenario dumped and played on.
+- `bin/sim.py`: 8 hunters for 6 game hours in about 30 s (~700 times real time), the profile led by the monsters' AI
+  (`Grid.near`) and the paths; `--until 1:30 --dump Hunter3 FILE`, then `--load FILE` plays it on, the same digest
+  each time.
+- Left for B0: the trace, the fair play checker, `--packets` for one puppet. Guild membership isn't in scenarios.
+
 ## B0 bots: session, hunting, levelling
 
 The session, hunting from data, levelling with the class build, on top of S0.
@@ -211,6 +236,66 @@ Steps (each leaves something that runs and is tested; after 3 is a stopping poin
 7. Done check: the last server start of `tests/client.py` enables bots with one made by `bin/account.py bot create`;
    the client sees its `12`, a `10` walk, an `18` swing and the `17` of a monster it killed. Then the real client
    watches a bot hunt outside Lorencia.
+
+Done:
+- Step 0 from the real client's logs already in `logs/` (2026-10-08), no new capture: a knight holding the attack
+  swings every 0.75..0.77 s at attack speed 32 (`0E`), the bots' swing is 1.0 s / (1 + speed / 100), the server's
+  shape fitted to it; walks re-sent while walking put a tile at 0.25..0.3 s (rough), the bots walk 0.3 s a tile. In
+  the doc, marked traffic. Casts, potions and gates aren't in the logs: casts take the swing's pace, `F3 12` goes 1 s
+  after the `1C` answer, placeholders in `mup/bot/motor.py`. The server's attack pace (M4) allows 2.5 times the
+  client's.
+- Storage: migration 7 `bots (character_id, seed, personality, career, schedule)`, `mup/model/bot.py` (`Bot`,
+  `Personality`: risk, rest below / until, drawn from the seed), `mup/repository/bot.py`. `bin/account.py bot create
+  NAME CLASS [--seed N]`, `bots`, `bot delete NAME` (`mup/bot/account.py`: an account of its name without password,
+  the character at the class's start gate). `bots_enabled = no` in `config.ini` (`[bots]`, the config is flat).
+- Session: `LocalSession` (`mup/server/session.py`) is what `Puppet` and `BotSession` share: packets as bytes
+  through `dispatch`, typed packets in the inbox, both in the packet log under the cid, a `tap` for the simulation's
+  digest. `BotManager` (`game.bots`, made by `bin/gs.py` when bots are enabled and by every `Sim`) logs bots in with
+  `CJoinGame`, runs them first in the game tick (the inbox to the brain, the brain when it is time, the motor),
+  `Session.saved()` stores a bot's row with its character. `Sim.bot(name, class, at, level, seed, brain)`, dumps
+  carry the bot row and load as a bot.
+- Motor: walk segments of at most 8 steps (4 towards a target), the next one when the client would have walked the
+  last; attack orders walk into reach (next to it, a skill's distance) on a path of at most 40 steps and swing or
+  cast at the client's pace, the weapon when the mana runs out; a walk ending on an entrance gate sends `1C` when the
+  level allows (the client's rule, at most every 3 s, one until the answer), `F3 12` after the map change. Flow
+  fields (`mup/bot/flow.py`): a BFS over the tiles a bot walks on (entrance gates left out unless they are the
+  target), 0.03 s for Lorencia, kept per map, target and blocked cells (64).
+- Career: the spawns on 16 x 16 cells (1589 cells with monsters, 0.3 s once per game). A `Fight` per monster type
+  from the client's formulas (hit chance, damage less defense, the client's pace, the damage of monsters that look
+  for players, the regeneration). A ground's worth is the exp per second of its best band of monster types (the
+  types added while they raise it, so slow kills don't drag the average), the cells around counting half, capped by
+  the respawns, the walk there weighed over 300 s. Deadly cells (a monster around that would take 80% of its life
+  in a fight) are left out and kept out of: travel, approaches, roaming and flights go around them. Builds:
+  knights 5/2/3/0, wizards 1/2/2/5, elves 3/4/2/1, gladiators 4/2/2/2 (str/agi/vit/ene). `bin/sim.py --grounds
+  CLASS`: without items every class hunts spiders up to level 10, budge dragons join around 15, knights and
+  gladiators move to bull fighters around 40. Only the bot's own map: the gate graph is there
+  (`career.reachable_maps`), travelling it is B1's.
+- Brain: priorities dead > escape > rest > points > level (travel, hunt, idle). Escape was added: a monster hitting
+  it that it can't afford, or one that would kill it about to notice it, makes it run to town when near, else out
+  of the monster's chase (twice its view range); rest flees the same way, then stands. It picks only fights it has
+  the life for, never a target near a monster that would kill it. Perception: its character, `c.view`, its packets
+  and the data; a monster's attack is a `18` swing next to it (the client doesn't read the `18` target). A ground is
+  given up after 180 s without a kill, 2 deaths or 5 escapes there; a target after 90 s, after 3 failed paths for
+  120 s. Watchdog: 300 s without exp or a step while travelling or hunting. The ground it hunted on is kept across
+  logins while it is worth 90% of the best.
+- Checker (`mup/bot/checker.py`): errors for a walk not from its tile, over 15 steps or before the last one ended,
+  a swing or cast while walking; refusals for a walk the server stopped, a swing or cast the server didn't pace
+  (its attack clock didn't move), a `1C` that moved nothing, a point not taken.
+- `bin/sim.py`: bots instead of hunters, the report (level per hour, kills, deaths, stuck, errors, refused, time per
+  activity), `--trace FILE` (JSON lines: time, bot, activity, event, map, position, life, target and the event's
+  values), `--packets BOT`, `--until T --dump BOT FILE`, `--load FILE`, `--grounds CLASS`, `--digest`, `--profile`.
+  4 hours at exp rate 1 on seeds 1, 2, 3: knights 6..8, wizards 8..9, elves 10, gladiators 7..8, none stuck, no
+  errors, nothing refused, 1..10 deaths per bot, about 650 times real time. 8 bots for 6 hours: 60 s.
+- `tests/sim.py` (9 s): the bots' digest is repeatable, a puppet sees a bot's `12` and `14`, the motor to the Noria
+  gate (127 steps in 38 s), no `1C` at level 1, through at 10 with `F3 12`; on the real data a knight hunts near
+  Lorencia, an elf in Noria; the test world: kills the spider and rests, dies to the hound and goes back to a ground
+  away from it, leaves alone a spider behind a wall, spends points by its build, a wizard casts until out of mana;
+  four classes level for 10 minutes at exp rate 10; a bot's scenario plays on. None breaks the client's rules.
+- `tests/client.py` ends with a bot: `bin/account.py bot create`, the game server restarted with bots enabled, a
+  client sees its `12`, a `10` walk, an `18` swing and the `17` of the monster it killed, its `15` in the packet
+  log under its cid.
+- Left: the real client watching a bot hunt outside Lorencia. Without potions bots rest 10..45% of the time and
+  wizards and gladiators die most (B1). The pace of casts, potions and gates still to capture.
 
 ## B1 bots: items, skills, map progression
 

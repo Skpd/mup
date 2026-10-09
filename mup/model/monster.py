@@ -63,6 +63,10 @@ class Monster:
     next_think_at: float = 0.0
     respawn_at: Optional[float] = None
 
+    def __hash__(self):
+        # by cid, so sets of monsters iterate in the same order on every run (docs/bots.md, S0)
+        return self.cid
+
     @property
     def type_id(self):
         return self.info.number

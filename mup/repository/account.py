@@ -1,4 +1,4 @@
-from mup.common.password import hash_password
+from mup.common.password import hash_password, NO_PASSWORD
 from mup.error import NotFoundError
 from mup.model.account import Account
 
@@ -23,9 +23,11 @@ class AccountRepository:
         return [self._account(row) for row in self.db.execute('SELECT * FROM accounts ORDER BY id')]
 
     def create(self, name, password, personal_code=''):
+        """password None: nobody logs in to it (simulations, bots), and no hashing time spent."""
+        stored = NO_PASSWORD if password is None else hash_password(password)
         with self.db:
             cur = self.db.execute('INSERT INTO accounts (name, password_hash, personal_code) VALUES (?, ?, ?)',
-                                  (name, hash_password(password), personal_code))
+                                  (name, stored, personal_code))
         return self.load_id(cur.lastrowid)
 
     def load_id(self, account_id):
@@ -33,6 +35,13 @@ class AccountRepository:
         if row is None:
             raise NotFoundError(account_id)
         return self._account(row)
+
+    def delete(self, account: Account):
+        """The account with its vault, its characters must be deleted first."""
+        with self.db:
+            self.db.execute("DELETE FROM items WHERE account_id = ? AND owner = 'warehouse'", (account.id,))
+            self.db.execute('DELETE FROM warehouses WHERE account_id = ?', (account.id,))
+            self.db.execute('DELETE FROM accounts WHERE id = ?', (account.id,))
 
     def save(self, account: Account):
         with self.db:

@@ -9,17 +9,22 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   (crypto keys, the client's terrains, `Gate.bmd`, `item.bmd`, `skill.bmd` and `Quest.bmd`, the server's `Monster.txt` /
   `MonsterSetBase.txt` / `Item.txt` / `Skill.txt` and `shop/`, mup's `ChaosMix.txt`), `config.ini` and the database
   are opened with relative paths.
-  `bin/account.py`: accounts (create, password, personal code, ban, GM).
+  `bin/account.py`: accounts (create, password, personal code, ban, GM) and bots (`bot create NAME CLASS`, `bots`,
+  `bot delete`). `bin/sim.py`: the game on a fast clock with bots, their report and trace, scenario dump / load,
+  `--grounds CLASS` (`docs/bots.md`, S0, B0).
 - `config.ini` (or the file in `MU_CONFIG`), read by `mup/config.py`: ports, advertised GS host, exp / drop rates,
   database file and autosave, monster, item, skill, shop and mix data files, fixed drops, Devil Square times, account
-  auto creation, log level, packet logging.
+  auto creation, bots, log level, packet logging.
 - `mup/packet/`: `base.py` has `Base(bytearray)` (type, size, head, sub) and the declarative `Packet`: `code`, `size`,
   `fields` as `(offset, name, type[, default])`, `entry` for lists. Field types carry the byte order (`u16` LE,
   `u16be`, `cid` BE). `Packet(name=value)` builds, `Packet(data)` parses into attributes; list packets have an
   `of(...)` builder from models. `client_packet/*` mapped by their `code` in `client.py`, `server_packet/*` aliased
   in `server.py` (`S...` names).
-- `mup/server/`: `protocol.py` (framing, crypto, dispatch to handlers), `game.py` (`GameServer`: connections by cid,
-  maps, the 100 ms game tick, entering, walking, relocating), `world.py` (maps, grids of who is where),
+- `mup/server/`: `session.py` (`Session`: what the game keeps on a connection, base of `protocol.py`'s network client;
+  `LocalSession`: one in process, packets as bytes through `dispatch`, typed packets in its inbox), `protocol.py`
+  (framing, crypto, packet log), `base.py` (`dispatch` to the handlers),
+  `game.py` (`GameServer`: connections by cid, maps, its clock, the 100 ms game tick, entering, walking, relocating),
+  `world.py` (maps, grids of who is where),
   `terrain.py`, `view.py` (what each client has in view, `12` / `13` / `14`, ground items `20` / `21`), `gate.py`,
   `monster.py` (monster data, spawns), `ai.py` (monster and summon behaviour), `path.py`, `combat.py` (hits, miss,
   ammunition, pace, death, respawn, regen), `stats.py` (what class, stats and items give, the client's formulas,
@@ -31,13 +36,24 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   repair), `warehouse.py`, `chaos.py` (chaos machine mixes), `jewel.py`, `command.py` (GM commands in chat),
   `chat.py` (chat, whispers), `party.py`, `trade.py`, `pk.py` (player kills, pk levels, murderers), `quest.py`
   (Sevina's quests), `guild.py`, `devil_square.py`, `connect.py`,
-  `handler/*` (one per packet, registered in `bin/gs.py` / `bin/cs.py`), `character.py` (creation rules, start
-  and respawn gates). Game time is `GameServer.now`, the tick passes it on.
-- `mup/model/` dataclasses. `mup/repository/`: SQLite storage (`database.py` schema migrations, account, character
-  and guild repositories). Characters in game live in memory and are saved by `GameServer.save`.
+  `handler/*` (one per packet, registered in `handlers.py` / `bin/cs.py`), `character.py` (creation rules, start
+  and respawn gates). Game time is `GameServer.now`, the tick passes it on; `GameServer.wall_time` for schedules.
+- `mup/sim.py`: the game in process on its own clock: `Sim` (seeded, in-memory database, `run` / `run_until`,
+  `digest`, `dump` / `load` of scenarios, `bot`), `Puppet` (a client in process for tests: `send` client packets,
+  typed server packets in `inbox`, `recv_until`), `Hunter` (a puppet that hunts, a cheap policy for tests).
+- `mup/bot/` (`docs/bots.md`): `session.py` (`BotSession`, a `LocalSession` with a brain), `manager.py`
+  (`BotManager`: logs bots in, drives them from the game tick, the trace), `motor.py` (the client's pace: walk
+  segments, attack orders, gates), `flow.py` (flow fields per map and target, walk masks), `career.py` (hunting
+  grounds from the spawns, fights from the client's formulas, class builds), `brain.py` (perception, priorities,
+  watchdog), `activity.py` (dead, escape, rest, points, travel, hunt, idle), `checker.py` (fair play: errors and
+  refusals), `account.py` (making and removing bots).
+- `mup/model/` dataclasses. `mup/repository/`: SQLite storage (`database.py` schema migrations, account, character,
+  guild and bot repositories). Characters in game live in memory and are saved by `GameServer.save`.
 - `mup/common/crypt.py`: C3/C4 SimpleModulus, C1/C2 xor chain (`extract` / `pack`), login field xor.
-- `docs/protocol-097.md`: the protocol as the client implements it. `docs/roadmap.md`: milestones.
+- `docs/protocol-097.md`: the protocol as the client implements it. `docs/roadmap.md`: milestones. `docs/bots.md`:
+  bots and the simulation (S0, B0..B3).
 - `tools/`: protocol extraction from the client with Ghidra. `tests/client.py`: scripted client test.
+  `tests/sim.py`: fast tests in game time.
 
 ## Running
 
@@ -60,8 +76,15 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   points, skills (scrolls, area hits, poison, teleport, weapon skills, an elf's buff, arrows, summons), monsters
   chasing and killing, respawn and a gate, NPCs (shops, wear and repair, the vault across a restart, a jewel, a
   mix, a trap), whispers, a party sharing a kill and trades, player kills, the quests, a guild and a Devil Square
-  round, one function per area. Run it after every change and extend it with every feature. It checks raw
+  round, and last a bot made with `bin/account.py` hunting after a restart with bots enabled, one function per
+  area. Run it after every change and extend it with every feature. It checks raw
   offsets from the doc, never the packet definitions, so a wrong definition fails it.
+- `./venv/bin/python tests/sim.py`: the game in process (`mup/sim.py`) on tests/client.py's test world, about 9 s:
+  the same seed gives the same game (also under another `PYTHONHASHSEED`), what tests/client.py would wait for in
+  game time (respawns, drop owner time and lifetime, regeneration, a Devil Square round, a scenario played on), and
+  the bots (session, motor through a gate, career picks on the real data, brain scenarios, four classes levelling, a
+  bot's scenario), none breaking the client's rules. Run it after every change too; a game error logged during a
+  simulation fails it.
 - The real client is the final check: ask the user to try it and paste the log.
 
 ## Protocol rules
@@ -95,4 +118,10 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 - Packet fields are copied from the doc table with their offsets; a layout mistake (overlap, past the size) fails
   at import. Logging: `logging.getLogger(__name__)`, no `print`.
 - Schema changes: append a migration to `MIGRATIONS` in `mup/repository/database.py`, never edit a shipped one.
+- Keep the game repeatable (`tests/sim.py` checks it): time from `game.now` / `game.wall_time`, never `time.time()`;
+  randomness through `random` (functions take `rng=random`), a bot's through its own `rng`; objects that go into
+  sets the game iterates hash by a number (`Monster` and `Session` by cid, `GroundItem` by id, `Party` by number),
+  never by address.
+- Bots perceive only what a client knows (their own character, `c.view`, the packets they get, the data files): never
+  a monster's life, target or path. They send only what a client would, the checker counts what breaks that.
 - Commit only when asked.

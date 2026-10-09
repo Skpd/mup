@@ -10,7 +10,6 @@ import datetime
 import logging
 import math
 import random
-import time
 from dataclasses import dataclass, field
 from itertools import count
 from typing import Dict, List
@@ -122,14 +121,15 @@ def overlap(a, b):
 
 def schedule(game, ds, now):
     """The next round by the configured times: Charon lets players in from its start - devil_square_entry."""
-    start = next_start(game.config, time.time())
+    wall = game.wall_time
+    start = next_start(game.config, wall)
     ds.state = CLOSED
     ds.told = set()
     ds.players = {}
     if start is None:
         ds.open_at = ds.start_at = math.inf
         return
-    ds.start_at = now + start - time.time()
+    ds.start_at = now + start - wall
     ds.open_at = ds.start_at - game.config.devil_square_entry
     ds.end_at = ds.start_at + game.config.devil_square_length
     logger.info('Devil Square: next round at %s', datetime.datetime.fromtimestamp(start).strftime('%H:%M'))
@@ -252,8 +252,9 @@ def minutes_to_open(game, ds, now):
     """Minutes until Charon lets players in again, at least 1."""
     open_at = ds.open_at
     if ds.state != CLOSED:
-        start = next_start(game.config, time.time() + (ds.start_at - now) + 1)
-        open_at = math.inf if start is None else now + start - time.time() - game.config.devil_square_entry
+        wall = game.wall_time
+        start = next_start(game.config, wall + (ds.start_at - now) + 1)
+        open_at = math.inf if start is None else now + start - wall - game.config.devil_square_entry
     if open_at == math.inf:
         return 0xFF
     return max(1, min(0xFF, math.ceil((open_at - now) / 60)))

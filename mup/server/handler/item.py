@@ -2,12 +2,12 @@ import logging
 from mup.packet.client import CPickUp, CDropItem, CMoveItem, CUseItem
 from mup.packet.server import SDropResult, SMoveItemResult, SPickUpResult
 from mup.server import ground, inventory, jewel, trade
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 
 logger = logging.getLogger(__name__)
 
 
-def pick_up_handler(msg: CPickUp, proto: BaseProtocol):
+def pick_up_handler(msg: CPickUp, proto: Session):
     if proto.player is None:
         return
     if trade.is_open(proto):
@@ -16,7 +16,7 @@ def pick_up_handler(msg: CPickUp, proto: BaseProtocol):
     ground.pick_up(proto.server, proto, msg.id & 0x7FFF)
 
 
-def drop_item_handler(msg: CDropItem, proto: BaseProtocol):
+def drop_item_handler(msg: CDropItem, proto: Session):
     if proto.player is None:
         return
     if ground.drop(proto.server, proto, msg.slot, msg.x, msg.y):
@@ -25,7 +25,7 @@ def drop_item_handler(msg: CDropItem, proto: BaseProtocol):
         proto.write(SDropResult(result=0, slot=msg.slot))
 
 
-def move_item_handler(msg: CMoveItem, proto: BaseProtocol):
+def move_item_handler(msg: CMoveItem, proto: Session):
     p = proto.player
     if p is None:
         return
@@ -43,7 +43,7 @@ def move_item_handler(msg: CMoveItem, proto: BaseProtocol):
         proto.write(SMoveItemResult.failed())
 
 
-def use_item_handler(msg: CUseItem, proto: BaseProtocol):
+def use_item_handler(msg: CUseItem, proto: Session):
     if proto.player is None:
         return
     if jewel.is_jewel(proto.player.inventory.get(msg.slot)):

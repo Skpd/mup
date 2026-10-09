@@ -2,12 +2,12 @@ import logging
 from mup.packet.client_packet.char_create import CharCreate
 from mup.packet.server import SCharCreated
 from mup.server.character import MAX_CHARACTERS, valid_name, creatable_class, new_character, start_gate
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 
 logger = logging.getLogger(__name__)
 
 
-def create_character_handler(msg: CharCreate, proto: BaseProtocol):
+def create_character_handler(msg: CharCreate, proto: Session):
     if proto.acc is None or proto.playing:
         return
 

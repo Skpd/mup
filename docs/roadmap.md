@@ -16,8 +16,8 @@ Packet codes are hex, details in `docs/protocol-097.md`. Where a code's meaning 
 | M5 NPCs, shops, warehouse, chaos machine | done |
 | M6 social: whisper, party, trade | done, real client check pending |
 | M7 guilds, quests, events, PK | done, real client check pending |
-| S0 fast tests and replay: game clock, puppets, scenarios (before B0, `docs/bots.md`) | todo |
-| B0 bots: session, hunting, levelling (after S0) | todo |
+| S0 fast tests and replay: game clock, puppets, scenarios (before B0, `docs/bots.md`) | done |
+| B0 bots: session, hunting, levelling (after S0) | done, real client check pending |
 | B1 bots: items, skills, map progression (after M3, M4) | todo |
 | B1b bots: town trips: sell, buy, repair (after B1, M5) | todo |
 | B2 bots: party, whisper, trade (after M6) | todo |

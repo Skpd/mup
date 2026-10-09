@@ -101,3 +101,8 @@ class GroundItem:
     owner: object = None  # connection that may pick it up alone until owner_until
     owner_until: float = 0.0
     expires_at: float = 0.0
+
+    def __hash__(self):
+        # by id, so views iterate in the same order on every run (docs/bots.md, S0); past the monster and player cids
+        # they share views with
+        return 0x10000 + self.id

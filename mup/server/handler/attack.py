@@ -2,13 +2,13 @@ import logging
 from mup.packet.client import CAttack
 from mup.packet.server import SAction
 from mup.server import combat, summon, view
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 from mup.server.world import distance
 
 logger = logging.getLogger(__name__)
 
 
-def attack_handler(msg: CAttack, proto: BaseProtocol):
+def attack_handler(msg: CAttack, proto: Session):
     p = proto.player
     if p is None or p.dead:
         return

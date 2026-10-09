@@ -1,12 +1,12 @@
 import logging
 from mup.packet.client import CLogout
 from mup.packet.server import SLogoutResult
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 
 logger = logging.getLogger(__name__)
 
 
-def logout_handler(msg: CLogout, proto: BaseProtocol):
+def logout_handler(msg: CLogout, proto: Session):
     if proto.acc is None:
         return
 

@@ -13,6 +13,21 @@ class Move(Packet):
         (5, 'path', Tail()),  # direction << 4 | step count, then one step per nibble, high nibble first
     )
 
+    MAX_STEPS = 15  # the count's nibble
+
+    @classmethod
+    def of(cls, x, y, steps, direction=None):
+        """A walk from x, y, steps: directions (indexes into STEPS). direction: where the walker faces at the end, the
+        last step's when not given."""
+        if len(steps) > cls.MAX_STEPS:
+            raise ValueError('{} steps, a walk has at most {}'.format(len(steps), cls.MAX_STEPS))
+        if direction is None:
+            direction = steps[-1] if steps else 0
+        nibbles = list(steps) + [0] * (len(steps) % 2)
+        path = bytes([direction << 4 | len(steps)]) + bytes(
+            nibbles[i] << 4 | nibbles[i + 1] for i in range(0, len(nibbles), 2))
+        return cls(x=x, y=y, path=path)
+
     def __init__(self, data=None, /, **values):
         super().__init__(data, **values)
 

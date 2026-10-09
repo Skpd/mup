@@ -3,12 +3,12 @@ from mup.common.password import check_password
 from mup.error import NotFoundError
 from mup.packet.client import CLoginRequest
 from mup.packet.server import SLoginResult
-from mup.server.protocol import BaseProtocol
+from mup.server.session import Session
 
 logger = logging.getLogger(__name__)
 
 
-def login_handler(msg: CLoginRequest, proto: BaseProtocol):
+def login_handler(msg: CLoginRequest, proto: Session):
     logger.info('Login %s, version %s, serial %s', msg.login, msg.version, msg.serial)
 
     # todo check version / serial
