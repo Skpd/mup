@@ -3,7 +3,6 @@ from collections import Counter
 from mup.bot.brain import Brain
 from mup.bot.checker import Checker
 from mup.bot.motor import Motor
-from mup.packet.server import SMapMove
 from mup.server.session import LocalSession
 
 
@@ -25,6 +24,7 @@ class BotSession(LocalSession):
         self.motor = Motor(self)
         self.checker = Checker(self)
         self.brain = Brain(self) if brain else None
+        self.acting_at = None  # game time of the tick it acts in: the motor's time, the server's clock moves on
 
     def __repr__(self):
         return '<BotSession {} {}>'.format(self.cid, self.bot.name)
@@ -35,22 +35,19 @@ class BotSession(LocalSession):
         return self.manager.flows.walkable(self.player.map_id, self.brain.blocked if self.brain else frozenset())
 
     def tick(self, now):
-        """Every game tick: the packets it got, the brain when it is time to think, the motor."""
+        """Every game tick: the packets it got (the answers to its requests first), the brain when it is time to
+        think, the motor."""
+        self.acting_at = now
         packets, self.inbox = self.inbox, []
+        self.checker.received(packets)
+        self.motor.perceive(packets, now)
         if self.brain is not None:
             self.brain.perceive(packets, now)
             self.brain.tick(now)
-        else:
-            self.motor_only(packets, now)
         self.motor.tick(now)
 
-    def motor_only(self, packets, now):
-        for packet in packets:
-            if isinstance(packet, SMapMove):
-                self.motor.map_changed(now)
-
     def send(self, packet):
-        now = self.server.now
+        now = self.acting_at if self.acting_at is not None else self.server.now
         self.sent[type(packet).__name__] += 1
         state = self.checker.before(packet, now)
         super().send(packet)

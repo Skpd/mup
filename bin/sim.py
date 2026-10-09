@@ -22,6 +22,7 @@ from collections import Counter
 from mup import config
 from mup.bot import CLASSES, career
 from mup.config import PACKET_LOGGER
+from mup.model.item import GRID
 from mup.server import character
 from mup.sim import Sim, Hunter
 
@@ -60,9 +61,15 @@ def report(sim, bots, wall, started_at, levels_at_start, final=False):
             print('  {:<10} logged out'.format(c.bot.name))
             continue
         gained = p.level - levels_at_start[c.bot.name]
-        print('  {:<10} {:<3} level {:>3} ({:+.1f}/h) kills {:>5} deaths {:>3} stuck {:>2} errors {:>2} refused {:>3}'
+        print('  {:<10} {:<3} level {:>3} ({:+.1f}/h) {:<8} kills {:>5} deaths {:>3} stuck {:>2} errors {:>2} refused {:>3}'
               '  {}'.format(c.bot.name, class_name(p.class_type), p.level, gained / (played / 3600) if played else 0,
-                            n['kills'], n['deaths'], n['stuck'], n['errors'], n['refused'], activities(n)))
+                            sim.game.maps[p.map_id].name[:8], n['kills'], n['deaths'], n['stuck'], n['errors'],
+                            n['refused'], activities(n)))
+        print('  {:<10} items {} zen {} potions {} learned {} worn {} owned {}: {}'.format(
+            '', n['items'], n['zen'], n['potions'], n['learned'], n['worn'], n['owned'], worn(p)))
+        if c.brain is not None and len(c.brain.visited) > 1:
+            print('  {:<10} maps: {}'.format('', ', '.join('{} {}'.format(sim.game.maps[m].name, clock(t))
+                                                         for m, t in sorted(c.brain.visited.items(), key=lambda v: v[1]))))
         if final:
             for message in c.checker.errors[:5]:
                 print('      error:', message)
@@ -72,6 +79,12 @@ def report(sim, bots, wall, started_at, levels_at_start, final=False):
             if c.player is not None:
                 by_class.setdefault(class_name(c.player.class_type), []).append(c.player.level)
         print('  levels by class:', ', '.join('{} {:.1f}'.format(k, sum(v) / len(v)) for k, v in by_class.items()))
+
+
+def worn(p):
+    """What p's player wears, +levels and the skill bit."""
+    return ', '.join('{}{}{}'.format(i.info.name, ' +{}'.format(i.level) if i.level else '', ' (s)' if i.skill else '')
+                     for slot, i in sorted(p.inventory.items()) if slot < GRID) or 'nothing'
 
 
 def activities(counts):
@@ -107,7 +120,8 @@ class OneBot(logging.Filter):
 
 
 def grounds(cfg_overrides, name):
-    """The grounds the career picks on the class's start map by level, and the maps the gates reach."""
+    """The grounds the career picks on the class's start map by level (no items, no travel), and the best of each
+    map the gates reach."""
     class_type = CLASSES[name]
     with Sim(0, **cfg_overrides) as sim:
         game = sim.game
@@ -115,14 +129,19 @@ def grounds(cfg_overrides, name):
         maps = sim.bots.grounds
         for level in LEVELS:
             p = career.built(class_type, level)
-            fights = career.fights_for(game, p, {t for g in maps[start].values() for t in g.counts})
+            reach = career.reachable_maps(game.gates, start, level, class_type == CLASSES['mg'])
+            fights = career.fights_for(game, p, {t for m in reach for g in maps.get(m, {}).values() for t in g.counts})
             ranked = career.rank(game, p, maps[start], fights=fights)
             deadly = career.deadly_cells(maps[start], fights)
-            reach = career.reachable_maps(game.gates, start, level, class_type == CLASSES['mg'])
             print('level {:>3}: {} deadly cells, gates reach maps {}'.format(level, len(deadly), sorted(reach)))
             for value, g, band in ranked[:3]:
                 print('    {:>6.2f} exp/s at {},{}: {}'.format(value, *g.center, ', '.join(
                     game.monster_info[t].name for t in band)))
+            for m in sorted(reach - {start}):
+                best = career.rank(game, p, maps.get(m, {}), fights=fights)[:1]
+                for value, g, band in best:
+                    print('    {:>6.2f} exp/s at {},{} of {}: {}'.format(value, *g.center, game.maps[m].name, ', '.join(
+                        game.monster_info[t].name for t in band)))
 
 
 def main(argv):

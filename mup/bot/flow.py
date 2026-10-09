@@ -1,17 +1,32 @@
 """
 Flow fields for long walks: the steps from every tile of a map to the nearest tile of a target area (a gate, the
 safe zone, a hunting ground), over the tiles a bot walks on. A bot walks downhill. One field is about 65 000 tiles
-looked at once, the fields are kept per map and target (Flows) and shared by the bots.
+looked at once, the fields are kept per map and target (Flows) and shared by the bots. Between maps, routes over the
+gates (Flows.routes).
 """
+import heapq
 from array import array
 from collections import OrderedDict, deque
+from dataclasses import dataclass
+from typing import Tuple
+from mup.bot import motor
 from mup.bot.career import CELL
 from mup.packet.client_packet.move import STEPS
 from mup.server import gate
 
 SIZE = 256
 FAR = 0xFFFF  # not reachable
-KEEP = 64  # fields kept, the least used go
+KEEP = 128  # fields kept, the least used go
+GATE_STEPS = round((motor.MAP_LOAD + motor.GATE_PAUSE) / motor.STEP_TIME)  # a gate's 1C and loading, in steps
+
+
+@dataclass(frozen=True)
+class Route:
+    """The way to the arrival area of an exit gate: the entrance gates in order and the steps walked, each gate
+    counting GATE_STEPS."""
+    steps: int
+    gates: Tuple[int, ...]
+    arrival: int  # the exit gate
 
 
 def walk_mask(game, map_id):
@@ -173,9 +188,43 @@ class Flows:
         everywhere."""
         return FlowField(self.mask(map_id, blocked), [(x, y)], self.game.maps[map_id].terrain.walkable)
 
-    def gate(self, number):
+    def gate(self, number, blocked=frozenset()):
+        """To the area of entrance gate number around the blocked cells: a walk down it ends on the gate."""
         g = self.game.gates[number]
-        return self.field(g.map_id, ('gate', number), lambda: [(x, y) for y in g.ys for x in g.xs])
+        return self.field(g.map_id, ('gate', number), lambda: [(x, y) for y in g.ys for x in g.xs], blocked)
+
+    def arrival(self, number, blocked=frozenset()):
+        """To the area of exit gate number, where its entrance puts a player, around the blocked cells: its distances
+        are the steps from there to everywhere."""
+        g = self.game.gates[number]
+        return self.field(g.map_id, ('arrival', number), lambda: [(x, y) for y in g.ys for x in g.xs], blocked)
+
+    def routes(self, map_id, x, y, level, magic_gladiator=False, blocked=frozenset()):
+        """Exit gate number -> Route: the fewest steps from x, y of map_id (around its blocked cells) through the
+        entrances a player of level may take (the client's rule, Gate.min_level) to every arrival area they lead
+        to."""
+        gates = self.game.gates
+        found = {}
+        heap = [(0, (), map_id, None)]  # steps, entrances taken, map, exit gate it arrived at (None: at x, y)
+        while heap:
+            steps, path, m, at = heapq.heappop(heap)
+            if at is not None:
+                if at in found:
+                    continue
+                found[at] = Route(steps, path, at)
+                g = gates[at]
+                starts = [(tx, ty) for ty in g.ys for tx in g.xs]
+            else:
+                starts = [(x, y)]
+            for e in self.entrances(m):
+                if e.target not in gates or e.target in found or level < e.min_level(magic_gladiator):
+                    continue
+                field = self.gate(e.number, blocked if at is None else frozenset())
+                d = min((d for d in (field.distance(tx, ty) for tx, ty in starts) if d is not None), default=None)
+                if d is not None:
+                    heapq.heappush(heap, (steps + d + GATE_STEPS, path + (e.number,), gates[e.target].map_id,
+                                          e.target))
+        return found
 
     def safe(self, map_id, blocked=frozenset()):
         """To the safe zone of map_id (its towns) around the blocked cells."""

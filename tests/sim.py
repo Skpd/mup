@@ -19,16 +19,18 @@ import tempfile
 import time
 from pathlib import Path
 
-from client import (MONSTERS, SPAWNS, DROPS, MIXES, ROOT, SPIDER_SPOT, HOUND_SPOT, B_SPOT, CHARON, DS_DRAGON,
-                    check)  # noqa: E402 (client puts the repository on the path)
+from client import (MONSTERS, SPAWNS, DROPS, MIXES, ROOT, SPIDER_SPOT, DRAGON_SPOT, HOUND_SPOT, GOBLIN_SPOT, B_SPOT,
+                    CHARON, DS_DRAGON, check)  # noqa: E402 (client puts the repository on the path)
 from mup.bot import CLASSES, career, motor
 from mup.bot.activity import Hunt, Rest
+from mup.model.item import GRID, GROUP_SIZE, RIGHT_HAND
 from mup.model.monster import Monster
 from mup.model.player import CharacterClass
-from mup.packet.client import CAttack, CDevilSquareEnter, CMove, CPickUp, CTalk
-from mup.packet.server import (SClear, SDevilSquareRanking, SDevilSquareResult, SGroundItems, SGroundZen, SItemsGone,
-                               SKill, SLife, SMapMove, SMeetMonster, SMeetPlayer, SMove, SPickUpResult, SRespawn)
-from mup.server import combat, command, devil_square, ground, monster
+from mup.packet.client import CAttack, CAreaHits, CDevilSquareEnter, CMagicAOE, CMagicAttack, CMove, CPickUp, CTalk
+from mup.packet.server import (SClear, SDamage, SDevilSquareRanking, SDevilSquareResult, SDurability, SGroundItems,
+                               SGroundZen, SItemDeleted, SItemsGone, SKill, SLife, SLookChange, SMapMove, SMeetMonster,
+                               SMeetPlayer, SMove, SPickUpResult, SRespawn, SSkillChange)
+from mup.server import combat, command, devil_square, ground, inventory, monster
 from mup.server.game import TICK
 from mup.server.world import distance
 from mup.sim import Sim, Hunter, of
@@ -47,14 +49,37 @@ WALL_SPIDER = """
 003 00 30 {} {} -1
 end
 """.format(*WALL[1])
+# the dragon alone, a spider alone in Noria (north of the arrival from Lorencia), the goblins alone
+DRAGON_ONLY = """
+2
+002 00 30 {} {} -1
+end
+""".format(*DRAGON_SPOT)
+NORIA_SPOT = (150, 25)
+NORIA_SPIDER = """
+2
+003 03 30 {} {} -1
+end
+""".format(*NORIA_SPOT)
+GOBLINS_ONLY = """
+2
+026 00 30 {0} {1} -1
+026 00 30 {0} {1} -1
+026 00 30 {0} {1} -1
+end
+""".format(*GOBLIN_SPOT)
+# the spider leaves a fire ball scroll (15/3) and nothing else
+SCROLL_DROP = """
+3 15 3 0 0 100
+"""
 
 
-def world(tmp, spawns=SPAWNS, name='monster_spawns'):
+def world(tmp, spawns=SPAWNS, name='monster_spawns', drops=DROPS):
     """Config of tests/client.py's test world, its files written to tmp. spawns: another MonsterSetBase text, name:
-    its file's."""
+    its file's; drops: another item_drops text."""
     files = {}
     for key, file, text in (('monster_info', 'monster_info', MONSTERS), ('monster_spawns', name, spawns),
-                            ('item_drops', 'item_drops', DROPS), ('mixes', 'mixes', MIXES)):
+                            ('item_drops', name + '_drops', drops), ('mixes', 'mixes', MIXES)):
         files[key] = os.path.join(tmp, file + '.txt')
         Path(files[key]).write_text(text)
     return dict(files, devil_square_times='', devil_square_entry=2.0, devil_square_length=6.0,
@@ -418,6 +443,159 @@ def wizard_mana(tmp):
         fair(c)
 
 
+def watch(c):
+    """The packets written to bot c from now on, as a list that fills while the game runs."""
+    seen = []
+    tap = c.tap
+
+    def spy(session, packet):
+        seen.append(packet)
+        if tap is not None:
+            tap(session, packet)
+    c.tap = spy
+    return seen
+
+
+def bot_loots(tmp):
+    print('a bot picks up the spider\'s drops and wears the sword')
+    with Sim(**world(tmp, SPIDER_ONLY, 'spider_only')) as sim:
+        events = traced(sim)
+        c = sim.bot('Botty', at=(0, *free_tile(sim, 0, SPIDER_SPOT, 3, 4)))
+        b = sim.enter('Bobby', at=(0, *free_tile(sim, 0, SPIDER_SPOT, 2, 3)))
+        p = c.player
+        sim.run_until(lambda: c.counts['kills'], limit=60, what='a kill')
+        sim.run_until(lambda: p.inventory.get(RIGHT_HAND) is not None, limit=30, what='the sword worn')
+        picked = [e['item'] for e in events if e['event'] == 'picked']
+        check(sorted(picked[:3]) == ['Short Sword', 'Small Healing Potion', 'zen'] and p.zen == 30,
+              'the spider is picked clean, one 22 at a time: {}, {} zen'.format(picked[:3], p.zen))
+        check(any(i.type == 14 * GROUP_SIZE + 1 for slot, i in p.inventory.items() if slot >= GRID),
+              'the potion is in its grid')
+        check(p.inventory[RIGHT_HAND].info.name == 'Short Sword' and p.values.damage_max > 28 // 4,
+              'the sword is worn: damage {}..{}'.format(p.values.damage_min, p.values.damage_max))
+        look = b.recv_until(of(SLookChange, cid=c.cid), what='the look change')
+        check(look.type == 1 and look.slot_level >> 4 == RIGHT_HAND, 'a puppet near sees it in its right hand (25)')
+        fair(c)
+
+
+def bot_potions(tmp):
+    print('a bot hit by the dragon drinks its potions, 2A then 28')
+    with Sim(**world(tmp, DRAGON_ONLY, 'dragon_only', drops='')) as sim:
+        game = sim.game
+        dragon = next(m for m in game.monsters.values() if m.type_id == 2)
+        monster.place(game, dragon, dragon.x, dragon.y, 10 ** 6, dragon.home, sim.now)  # it lasts
+        c = sim.bot('Botty', at=(0, *free_tile(sim, 0, (dragon.x, dragon.y), 1, 1)))
+        p = c.player
+        c.brain.next_think_at = sim.now + 2  # it lets the dragon come
+        potion = game.new_item(game.item_info[14 * GROUP_SIZE + 1], durability=2)
+        p.inventory[inventory.free_slot(p.inventory, potion.info)] = potion
+        inventory.send(c)
+        seen = watch(c)
+        sim.run_until(lambda: c.brain.attacker(sim.now) is not None, limit=5, what='the dragon hits')
+        for drinks in (1, 2):
+            p.life = int(p.max_life * c.bot.personality.potion_below) - 1
+            sim.run_until(lambda: c.counts['potions'] == drinks, limit=5, what='drink {}'.format(drinks))
+        answers = [type(x).__name__ for x in seen if isinstance(x, (SDurability, SItemDeleted)) and x.unlock]
+        check(answers == ['Durability', 'ItemDeleted'], 'below {} of its life it drinks: {}, the last one 28'.format(
+            c.bot.personality.potion_below, answers))
+        check(not gear_potions(p), 'none left')
+        fair(c)
+
+
+def gear_potions(p):
+    return [i for slot, i in p.inventory.items() if slot >= GRID and i.type in range(14 * GROUP_SIZE,
+                                                                                      14 * GROUP_SIZE + 7)]
+
+
+def bot_learns(tmp):
+    print('a wizard learns a scroll from the spider and casts it')
+    with Sim(**world(tmp, SPIDER_ONLY, 'spider_scroll', drops=SCROLL_DROP)) as sim:
+        events = traced(sim)
+        c = sim.bot('Merlin', CharacterClass.DARK_WIZARD, at=(0, *free_tile(sim, 0, SPIDER_SPOT, 3, 4)), level=5)
+        p = c.player
+        seen = watch(c)
+        sent = []
+        send = c.send
+
+        def spy(packet):
+            sent.append(packet)
+            send(packet)
+        c.send = spy
+        sim.run_until(lambda: 4 in p.skills, limit=120, what='fire ball learned')
+        change = next(x for x in seen if isinstance(x, SSkillChange))
+        check(change.change == SSkillChange.ADD and change.skill == 4 and any(
+            e['event'] == 'learn' for e in events), 'energy {}: it picks up the scroll and learns fire ball (F3 11 '
+                                                    'FE)'.format(p.energy))
+        index = p.skills.index(4)
+        sim.run_until(lambda: any(isinstance(x, CMagicAttack) and x.skill_index == index for x in sent), limit=60,
+                      what='a fire ball')
+        check(True, 'then it casts fire ball (19 with list index {})'.format(index))
+        fair(c)
+
+
+def bot_build(cfg):
+    print('the points go to what a piece it will soon wear asks for')
+    with Sim(**cfg) as sim:
+        game = sim.game
+        c = sim.bot('Botty', at=(0, 140, 125))
+        p = c.player
+        command.item(game, c, 7, 5)  # a leather helm, 34 strength
+        before = p.strength, p.agility, p.vitality, p.energy
+        command.level(game, c, 2)
+        sim.run_until(lambda: p.free_points == 0, limit=5, what='points spent')
+        gained = tuple(a - b for a, b in zip((p.strength, p.agility, p.vitality, p.energy), before))
+        check(gained == (5, 0, 0, 0), 'a knight at level 2 with a leather helm: strength +5, not by its build: {}'
+              .format(gained))
+        command.level(game, c, 3)
+        sim.run_until(lambda: 2 in p.inventory, limit=10, what='the helm worn')
+        check(p.strength >= 34, 'at level 3 it has {} strength and wears the helm'.format(p.strength))
+        fair(c)
+
+
+def bot_area(tmp):
+    print('a wizard with flame casts it at the goblins (1E) and reports what its effect reached (1D)')
+    with Sim(**world(tmp, GOBLINS_ONLY, 'goblins_only', drops='')) as sim:
+        c = sim.bot('Merlin', CharacterClass.DARK_WIZARD, at=(0, *free_tile(sim, 0, GOBLIN_SPOT, 4, 5)), level=40)
+        c.brain.next_think_at = 1e9  # the test gives the orders
+        command.learn(sim.game, c, 5)
+        sim.run(1)
+        goblins = [o for o in c.view if isinstance(o, Monster) and o.type_id == 26]
+        target = goblins[0]
+        skill = c.brain.skill(target)
+        check(len(goblins) == 3 and skill == 5, 'three goblins around: it picks flame ({})'.format(skill))
+        sent = []
+        send = c.send
+
+        def spy(packet):
+            sent.append(packet)
+            send(packet)
+        c.send = spy
+        seen = watch(c)
+        c.motor.attack(target, skill)
+        sim.run_until(lambda: any(isinstance(x, CAreaHits) for x in sent), limit=10, what='the 1D report')
+        cast = next(x for x in sent if isinstance(x, CMagicAOE))
+        report = next(x for x in sent if isinstance(x, CAreaHits))
+        hit = {e['cid'] for e in report.entries}
+        near = {g.cid for g in goblins if distance(g.x, g.y, target.x, target.y) <= motor.AREA_REACH}
+        check((cast.x, cast.y) == (target.x, target.y) and hit == near and len(hit) >= 2,
+              '1E at the goblin, 1D with the {} goblins within {} tiles of it'.format(len(hit), motor.AREA_REACH))
+        sim.run(0.2)
+        check({x.cid for x in seen if isinstance(x, SDamage)} >= hit, 'the goblins it reported take the damage')
+        fair(c)
+
+
+def bot_map(tmp):
+    print('a level 10 bot whose only ground is in Noria goes there')
+    with Sim(**world(tmp, NORIA_SPIDER, 'noria_spider')) as sim:
+        events = traced(sim)
+        c = sim.bot('Botty', at=(0, 140, 125), level=10)
+        p = c.player
+        sim.run_until(lambda: p.map_id == 3, limit=180, what='in Noria')
+        check(any(e['event'] == 'route' for e in events), 'it walks to the Noria gate and goes through it')
+        sim.run_until(lambda: c.counts['kills'], limit=120, what='a kill')
+        check(c.brain.ground.map_id == 3, 'it hunts the spider at {},{}'.format(*c.brain.ground.center))
+        fair(c)
+
+
 def bots_level():
     print('four classes level on the real data')
     with Sim(seed=4, exp_rate=10) as sim:
@@ -474,6 +652,12 @@ def main():
             bot_unreachable(tmp)
             bot_points(cfg)
             wizard_mana(tmp)
+            bot_loots(tmp)
+            bot_potions(tmp)
+            bot_learns(tmp)
+            bot_build(cfg)
+            bot_area(tmp)
+            bot_map(tmp)
             bots_level()
             bot_scenario(tmp)
         except AssertionError as e:

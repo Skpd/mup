@@ -2054,6 +2054,7 @@ def devil_square(t):
 
 # where B watches the bot hunt: the east exit of Lorencia, the spider and the dragon in view
 BOT_WATCH = (188, 112)
+BOT_HUNTS = (195, 100)  # a new knight hunts the test dragons around here
 
 
 def bots(t):
@@ -2087,10 +2088,17 @@ def bots(t):
     check(True, 'it swings: 18 [6] 0x64 at {}'.format(p[7] << 8 | p[8]))
     p = b.recv_until(lambda p: p.head == 0x17 and (p[6] << 8 | p[7]) & 0x7FFF == bot, timeout=60, what='its kill')
     check(True, 'it kills monster {}: 17 with it at [6..7]'.format((p[3] << 8 | p[4]) & 0x7FFF))
+    gm_move(b, 'Bobby', 0, *BOT_HUNTS)
+    slot, _ = give(b, 'Bobby', 0, 1)
+    b.send([0xC1, 0, 0x23, *BOT_HUNTS, slot], encrypt=True)
+    check(b.recv_until(key(0x23), what='drop result')[3] == 1, 'B drops a short sword where it hunts the dragons')
+    p = b.recv_until(lambda p: p.head == 0x25 and (p[3] << 8 | p[4]) & 0x7FFF == bot, timeout=60, what='its sword')
+    check(p[5] == SWORD[0] and p[6] >> 4 == 0, 'it picks up the sword and wears it: 25 with 0/1 in its right hand')
     gs.log.flush()
     log = Path(gs.log.name).read_text(errors='replace')
-    check('Bot Botty enters the game' in log and ' {} < c1 07 15 '.format(bot) in log,
-          'the game server log has it entering and its 15 under its cid')
+    check('Bot Botty enters the game' in log and ' {} < c1 07 15 '.format(bot) in log
+          and ' {} < c3 05 22 '.format(bot) in log and ' {} < c3 0b 24 '.format(bot) in log,
+          'the game server log has it entering, its 15, 22 and 24 under its cid')
 
 
 def play(servers, db_path):

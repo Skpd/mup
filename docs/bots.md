@@ -332,6 +332,77 @@ Steps:
 8. Optional: jewels of bless on the best worn piece up to +6, soul by the personality's risk; jewels are kept for
    trading in B2 otherwise.
 
+Done:
+- Gear (`mup/bot/gear.py`): a piece's worth is the share of exp per second it adds in the career's fights against
+  the bot's band (its values with the piece worn against without, `gear.trial` with the weapon skills the server
+  would grant); the raw values (the damage of the hands it hits with, wizardry, defense, a quarter of the defense
+  rate, half the speeds) break exact ties only. That makes it an order: a first mix of both, relative to the outfit
+  it started from, went round in circles (an empty left hand prefers the axe, the axe the shield, taking the axe off
+  for the shield empties the hand). A bow without arrows gives nothing, one with its arrows in the grid is worn with
+  them. Keeping values: an upgrade its share (at least 0.01), one it can wear within 3 levels half of that, potions
+  0.2 while it has fewer than 4 of the kind (mana potions once a skill takes mana), a scroll or orb it can learn
+  within 3 levels 1, jewels 0.5, arrows and bolts 0.2 for the classes that wear bows, zen 0.05; the rest is junk.
+- Activities (priority items, between points and level, only with no monster at it): loot, the nearest item worth
+  something within 12 tiles and not where a deadly monster would notice it, one `22` at a time, a full grid drops its
+  least worth item first when that is worth less, a refused one is tried once more after the owner time; equip,
+  scrolls and orbs it can learn (`26`), then the best change of its grid one `24` at a time, what leaves a slot goes
+  to the grid when it is still worth something and there is room, else on the ground (`23`). The motor holds the
+  item requests: the pick up order walks next to the item (the client's 1.5 tiles), one `22` / `24` until its
+  answer, no `26` or `24` while item use is locked, 0.5 s from the unlock to the next `26` (a placeholder).
+- Potions: a reflex at every think, in a fight below the personality's `potion_below` (0.3..0.5, drawn after the
+  older values so a seed keeps them): the healing potion that gives most without going over, the elf's heal instead
+  when she has it and the mana; a mana potion when its skill lacks the mana in a fight (what the client does on its
+  own). Healing potions lower the rest threshold, by half with 4.
+- Build: `gear.goal`, the stats the most worth piece, scroll or orb of its grid asks for that it can use within 3
+  levels, gets the level up points first (`career.next_point(p, goal)`).
+- Skills: the career counts weapon skills (the weapon's damage times 200 + energy / 10 % for knights, / 30 for
+  gladiators, paced as swings) and the mana: over a hunt only the casts its regeneration allows, the weapon in
+  between; one fight starts with half its mana. "ok", "deadly" and "fit" are about one fight, the exp per second
+  about the hunt (the long run alone made a level 1 wizard's fight with a budge dragon deadly: 26 s). `Brain.skill`
+  picks per target the most damage per second it has the mana for now, an area skill counting the monsters within
+  3 tiles of the target (5 at most). Area: `1E` at the target, the `1D` report 0.4 s later with the monsters in view
+  within 3 tiles of the point (both placeholders within the client's 0.8..3 tiles). Weapon skills send the client's
+  `10` turn first. The elf, while she hunts: her best summon when she has none, greater defense and damage when they
+  ran out, on herself (`19`).
+- Map progression: `Flows.routes` searches the entrances its level allows (Dijkstra, a gate counts 13 steps for its
+  `1C` and loading), around the cells it keeps out of on its own map. The pick ranks the grounds of every map the
+  gates reach: on another map the walk is the route and the steps from the arrival area around that map's deadly
+  cells (but the arrival area's own), weighed against 1800 s of hunting (300 on its map), and the ground has to be
+  worth 1.1 times the best of its own map. On a map it came to it stays 20 minutes while it finds a ground there; 3
+  deaths there send it back where it came from, the map left out for 30 minutes and 2 levels. Travel walks down the
+  field to the first gate of the route, the motor goes through, on the next map it walks on from where it arrived.
+  The respawn town is the server's by map, the bot picks from where it comes back.
+- Found on the way, B0's model: `career.fight` divided by zero at an attack rate equal to the defense rate (no hits
+  by the server's rule); the hunt's give up never fired when the hunt ended by roaming off its ground and started
+  again (the last kill is kept per ground now, 90 s); a ground is a 16 x 16 cell but a monster killed there respawns
+  anywhere in its spawn area, mostly away: the bot's own kills on a ground in the last 10 minutes count against it
+  like other hunters sharing the respawns (with gear the elf emptied its cell and roamed); every real monster looks
+  for players, those it can't fight dilute a ground's worth (excluding the ground left level 1 characters nothing,
+  budge dragons are near every spider); targets out of reach of the tiles it walks on are skipped; after looting it
+  hunts on where it stands when that is near its ground.
+- `tests/sim.py` (10 s): the spider's sword, potion and zen picked clean and the sword worn, a puppet gets the `25`;
+  two drinks hit by the dragon, `2A` then `28`; a wizard learns fire ball from the spider's scroll and casts it; a
+  knight with a leather helm puts its points into strength and wears the helm at level 3; a wizard with flame casts
+  it at the goblins and reports them in `1D`; a level 10 bot whose only ground is in Noria goes through the gate and
+  hunts there. None breaks the client's rules. In `tests/client.py` the bot hunts the test dragons, which drop
+  nothing: a GM drops a short sword there, the client sees the bot wear it (`25`), its `22` and `24` are in the packet
+  log under its cid. On the real clock the checker found a walk "0.00 s before the last one ended": the motor works
+  with the tick's time, the session read the clock again when it sent; a bot's packets carry the tick's time now.
+- `bin/sim.py`: the report has the items, zen, potions, skills learned, pieces worn, refused pick ups of others'
+  drops ("owned"), what it wears and the maps it went to with the game time; `--grounds` the best ground of each map
+  the gates reach. 4 hours at exp rate 1, seeds 1..6, the class averages from B0 to B1: knights 7.2 -> 13.3,
+  wizards 8.2 -> 12.2, elves 9.0 -> 10.2, gladiators 7.0 -> 14.2; no errors, nothing refused, 1..7 deaths per bot.
+  Done check: a gladiator alone (seeds 1, 2, 3, 6 hours) goes from Lorencia to Noria at 3:35..4:08, at level 15 or
+  so, wearing a kris or two axes, a helm, gloves and boots it looted. Knights and wizards alone stay in Lorencia up
+  to level 15..17 in 6 hours: for them Noria is at most about 10% better, under the margin (8 bots on seed 1, 6
+  hours: a knight goes too, at 3:18, sharing its grounds with another). About 470 times real time with 4
+  bots (B0 650), 8 bots for 6 hours in 88 s (B0 60 s): the flow fields per set of deadly cells and the loot.
+- Left: the real client watching a bot loot and wear, and a gladiator through the Noria gate. Step 8 (jewels) isn't
+  done, jewels are kept. Arrows don't drop in this data (`Item.txt`), so elves never get to use a bow. Gladiators
+  still die in Noria's north where two or three hunters come at once (a try counting all the attackers against the
+  life left looped at the edge of town and was taken out). The pace of casts, potions, gates and area effects is
+  still to capture.
+
 ## B1b bots: town trips
 
 After B1, shops are there since M5.

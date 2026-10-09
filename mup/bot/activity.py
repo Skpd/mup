@@ -2,15 +2,15 @@
 What a bot is doing: small state machines the brain picks by priority (mup.bot.brain). step(now) runs at every
 think and returns None while it goes on, DONE or FAILED when it ended; past its timeout (if it has one) it failed.
 """
-from mup.bot import career
+from mup.bot import career, gear
 from mup.packet.client import CAddPoint
-from mup.server import ai
+from mup.server import ai, inventory
 from mup.server.path import find_path
 from mup.server.world import VIEW_RANGE, distance
 
 DONE, FAILED = 'done', 'failed'
-# priorities, lower first: survive > spend points > level
-DEAD, ESCAPE, REST, POINTS, LEVEL = 0, 1, 2, 3, 4
+# priorities, lower first: survive > spend points > items > level
+DEAD, ESCAPE, REST, POINTS, ITEMS, LEVEL = 0, 1, 2, 3, 4, 5
 TOWN = 40  # steps to the safe zone a bot runs for when it flees
 FLEE_BUDGET = 600  # tiles looked at for a way out
 
@@ -115,7 +115,7 @@ class Rest(Activity):
 
     def step(self, now):
         p, motor, brain = self.player, self.motor, self.brain
-        if p.life >= p.max_life * brain.personality.rest_until:
+        if p.life >= p.max_life * max(brain.personality.rest_until, brain.rest_below()):
             return DONE
         threats = brain.threats(now)
         if self.c.server.maps[p.map_id].terrain.safe(p.x, p.y) or not threats:
@@ -126,7 +126,8 @@ class Rest(Activity):
 
 
 class SpendPoints(Activity):
-    """Level up points into the stats by the class build, F3 06 one at a time (the answer comes at once)."""
+    """Level up points into the stats, F3 06 one at a time (the answer comes at once): first what a piece it will
+    soon wear asks for (mup.bot.gear.goal), then by the class build."""
     name = 'points'
     priority = POINTS
     timeout = 30.0
@@ -134,37 +135,125 @@ class SpendPoints(Activity):
 
     def step(self, now):
         p = self.player
+        goal = self.brain.goal()
         for _ in range(self.PER_THINK):
             if p.free_points <= 0:
                 return DONE
-            self.c.send(CAddPoint(stat=career.next_point(p)))
+            self.c.send(CAddPoint(stat=career.next_point(p, goal)))
         return DONE if p.free_points <= 0 else None
 
 
+class Loot(Activity):
+    """
+    Picks up what it wants of the items on the ground in its view (mup.bot.brain.loot), nearest first: walks next to
+    it and sends 22, one at a time. With its grid full it drops what is worth least to it first, when that is worth
+    less. An item refused (another's for a while) is tried once more after the owner time, then left.
+    """
+    name = 'loot'
+    priority = ITEMS
+    timeout = 60.0
+
+    def step(self, now):
+        brain, motor, p = self.brain, self.motor, self.player
+        if motor.item is not None or motor.handling():
+            return None
+        g = brain.loot(now)
+        if g is None:
+            return DONE
+        if g.item is not None and inventory.free_slot(p.inventory, g.item.info) is None:
+            slot = brain.junk(brain.loot_value(g))
+            if slot is not None and motor.drop(slot):
+                brain.event('drop', item=p.inventory[slot].info.name, room_for=g.item.info.name)
+            return None
+        motor.pick_up(g)
+        brain.event('loot', item=g.item.info.name if g.item is not None else 'zen', x=g.x, y=g.y)
+        return None
+
+
+class Equip(Activity):
+    """
+    Learns the scrolls and orbs it can (26), wears the upgrades of its grid (mup.bot.gear.best_change) one 24 at a
+    time: what has to leave the slot and the hands goes to the grid first, or on the ground when it is worth nothing
+    more or there is no room, then the piece goes on.
+    """
+    name = 'equip'
+    priority = ITEMS
+    timeout = 30.0
+
+    def step(self, now):
+        brain, motor, p = self.brain, self.motor, self.player
+        if motor.handling():
+            return None
+        slot = brain.scroll()
+        if slot is not None:
+            item = p.inventory[slot]
+            if motor.use(slot, now):
+                self.c.counts['learned'] += 1
+                brain.event('learn', item=item.info.name)
+            return None
+        change = brain.best_change()
+        if change is None:
+            return DONE
+        game = self.c.server
+        for s in change.out:
+            piece = p.inventory.get(s)
+            if piece is None:
+                continue
+            after = gear.trial(game, p, change.after)
+            free = inventory.free_slot(p.inventory, piece.info)
+            if free is not None and gear.value(game, after, piece, brain.types(), brain.personality.risk) > 0:
+                motor.move_item(s, free)
+                brain.event('take off', item=piece.info.name, slot=s)
+            else:
+                motor.drop(s)
+                brain.event('drop', item=piece.info.name, slot=s)
+            return None
+        for source, s, item in change.wear:
+            if p.inventory.get(s) is item:
+                continue
+            if source is None or p.inventory.get(source) is not item:
+                return self.fail('the item moved')
+            motor.move_item(source, s)
+            self.c.counts['worn'] += 1
+            brain.event('wear', item=item.info.name, slot=s, gain=round(change.gain, 3))
+            return None
+        return None
+
+
 class Travel(Activity):
-    """Walks to a hunting ground of its map down the ground's flow field around the blocked cells. Fails when it
-    can't get there or stops getting closer."""
+    """Walks to a hunting ground down a flow field around the cells it keeps out of: the ground's on its map, else
+    the way to the first gate of the route there (mup.bot.brain.way), the motor goes through it. Fails when it can't
+    get there or stops getting closer."""
     name = 'travel'
     timeout = 1800.0
     NO_PROGRESS = 30.0  # seconds without getting closer
 
-    def __init__(self, brain, now, ground, blocked=frozenset()):
+    def __init__(self, brain, now, ground):
         super().__init__(brain, now)
         self.ground = ground
-        self.field = self.c.manager.flows.field(ground.map_id, ('ground',) + ground.key, lambda: ground.tiles,
-                                                blocked)
+        self.field = None
+        self.map_id = None  # the map the field is of
         self.best = None
         self.progress_at = now
 
     def details(self):
-        return {'to': list(self.ground.center)}
+        return {'to': list(self.ground.center), 'map': self.ground.map_id}
 
     def step(self, now):
         p, motor = self.player, self.motor
         if self.ground.contains(p.map_id, p.x, p.y):
             motor.stop()
             return DONE
-        d = self.field.distance(p.x, p.y) if p.map_id == self.ground.map_id else None
+        if motor.loading_until is not None:
+            return None
+        if self.map_id != p.map_id:  # it came here: the way on from here
+            self.map_id, self.best, self.progress_at = p.map_id, None, now
+            self.field = self.brain.way(self.ground)
+            if self.field is None:
+                return self.fail('no way there')
+            if self.ground.map_id != p.map_id:
+                self.brain.event('route', map=p.map_id, to_map=self.ground.map_id)
+        d = self.field.distance(p.x, p.y)
         if d is None:
             return self.fail('no way there')
         if self.best is None or d < self.best:
@@ -181,12 +270,13 @@ class Hunt(Activity):
     Hunts on its ground: the monsters that attack it first, then those of its band nearest first, each until its 17
     or until it takes too long; a monster it can't reach is left alone after a few tries. With none in view it walks
     about the ground. Done when it wandered off the ground with nothing to fight or the brain wants another ground,
-    failed when it found nothing to kill for a long time.
+    failed when it killed nothing for a long time since it picked the ground (mup.bot.brain.Brain.kill_at), hunts
+    of it before counting.
     """
     name = 'hunt'
     timeout = None
     TARGET_TIME = 90.0  # seconds a target may take before it is left alone
-    IDLE = 180.0  # seconds without a kill before the ground is given up
+    IDLE = 90.0  # seconds without a kill before the ground is given up
     AWAY = 24  # tiles from the ground's center it may chase to
     ROAM = 12  # tiles to the spots it walks to
     ROAM_DRAWS = 8
@@ -198,8 +288,6 @@ class Hunt(Activity):
         self.band = set(band)
         self.target = None
         self.target_since = now
-        self.kills = brain.kills
-        self.kill_at = now
         self.unfit = False  # monsters of its band are in view but it hasn't the life to fight them
 
     def details(self):
@@ -207,8 +295,6 @@ class Hunt(Activity):
 
     def step(self, now):
         brain, motor, p = self.brain, self.motor, self.player
-        if brain.kills != self.kills:
-            self.kills, self.kill_at = brain.kills, now
         if motor.unreachable is not None:
             brain.unreachable(motor.unreachable, now)
             motor.unreachable = None
@@ -230,11 +316,11 @@ class Hunt(Activity):
                 brain.event('target', target=mob.cid, type=mob.type_id)
         self.unfit = mob is None and brain.choose_target(now, self.band, fit=False) is not None
         if mob is not None:
-            motor.attack(mob, brain.skill())
+            motor.attack(mob, brain.skill(mob))
             return None
         if brain.repick:
             return DONE
-        if now - self.kill_at > self.IDLE:
+        if now - brain.kill_at > self.IDLE:
             return self.fail('nothing killed')
         if distance(p.x, p.y, *self.ground.center) > self.AWAY:
             return DONE

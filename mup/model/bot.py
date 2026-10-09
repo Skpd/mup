@@ -7,11 +7,13 @@ class Personality:
     risk: float = 0.5  # 0 careful .. 1 reckless: how much of its life a kill may cost
     rest_below: float = 0.4  # share of its life it rests below
     rest_until: float = 0.9  # and rests up to
+    potion_below: float = 0.4  # share of its life it drinks a potion below in a fight
 
     @classmethod
     def roll(cls, rng):
+        # new values are drawn after the others: a seed keeps what it drew before
         return cls(risk=round(rng.uniform(0.2, 0.8), 2), rest_below=round(rng.uniform(0.3, 0.5), 2),
-                   rest_until=round(rng.uniform(0.8, 1.0), 2))
+                   rest_until=round(rng.uniform(0.8, 1.0), 2), potion_below=round(rng.uniform(0.3, 0.5), 2))
 
     @classmethod
     def of(cls, values):

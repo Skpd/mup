@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 from mup.bot import motor
 from mup.model.player import CharacterClass, DEFAULT_SKILLS, Player
-from mup.server import combat, experience, gate, stats
+from mup.server import casting, combat, experience, gate, stats
 
 CELL_BITS = 4  # cells of 16 x 16 tiles
 CELL = 1 << CELL_BITS
@@ -28,7 +28,9 @@ MAX_KILL_TIME = 60.0  # seconds a kill may take
 FIGHT_LIMIT = 30.0  # seconds of a fight that may go on before the bot would leave
 DEADLY_LIFE = 0.8  # share of its life a fight with a monster that looks takes that makes the monster deadly
 HORIZON = 300.0  # seconds it would hunt on a ground before it looks again, the walk there is weighed against it
+MAP_HORIZON = 1800.0  # on a ground of another map: it stays on a map longer
 VARIETY = 0.05  # a bot's liking of a ground varies by this share, so bots of a class spread a little
+POOL = 0.5  # share of its mana a fight starts with
 
 # shares of the level up points by class (strength, agility, vitality, energy), mup's choice: knights and gladiators
 # hit harder and last, wizards cast, elves fight with what strength and agility give before they have a bow
@@ -138,45 +140,101 @@ def hit_chance(attack_rate, defense_rate):
     return 1.0 if attack_rate <= 0 else (attack_rate - defense_rate) / attack_rate
 
 
-@dataclass
-class Fight:
-    """What fighting a monster type costs a bot and brings it, on average."""
-    kill_time: float  # seconds of swings or casts
-    dps: float  # life per second it takes while it fights back (monsters that look for players)
-    exp: float
-    ok: bool  # killed in time for no more life than the bot's risk allows
-    deadly: bool  # it looks, and a fight with it would take about all the bot's life
-
-    @property
-    def damage(self):
-        return self.dps * self.kill_time
+def skill_rise(p):
+    """% of the weapon's damage a weapon skill hits with: knights 200 + energy / 10, gladiators 200 + energy / 30,
+    the others the weapon's (mup.server.casting.skill_damage)."""
+    cls = stats.class_number(p)
+    if cls == stats.DK:
+        return 200 + p.energy // 10
+    if cls == stats.MG:
+        return 200 + p.energy // 30
+    return 100
 
 
 def attack(p, skill=None):
-    """(min, max, share %) ranges of a hit and the seconds between hits: the skill (a SkillInfo with damage) or the
-    weapon, at the client's pace (mup.bot.motor)."""
+    """(min, max, share %) ranges of a hit and the seconds between hits: a wizardry skill (a SkillInfo with damage),
+    a weapon skill (one without: the weapon's damage raised by skill_rise) or the weapon, at the client's pace
+    (mup.bot.motor)."""
     v = p.values
-    if skill is not None:
+    if skill is not None and skill.damage:
         lo, hi = v.magic_min + skill.damage, v.magic_max + skill.damage + skill.damage // 2
         return [(lo, hi, 100 + v.staff_rise)], motor.CAST_TIME / (1 + v.magic_speed / 100)
-    return combat.weapon_ranges(p), motor.SWING_TIME / (1 + v.attack_speed / 100)
+    ranges = combat.weapon_ranges(p)
+    if skill is not None:
+        rise = skill_rise(p)
+        ranges = [(lo, hi, share * rise // 100) for lo, hi, share in ranges]
+    return ranges, motor.SWING_TIME / (1 + v.attack_speed / 100)
+
+
+def mana_rate(p):
+    """Mana per second the regeneration gives back (mup.server.combat.regen)."""
+    return max(1, int(p.max_mana * combat.MANA_REGEN)) / combat.REGEN_INTERVAL
+
+
+def landed(p, ranges, interval, defense, defense_rate, level):
+    """Damage per second of hits of ranges every interval seconds that land on a target of defense and defense
+    rate, at least the minimum damage of a hit at level."""
+    rolled = sum((lo + hi) / 2 * share / 100 for lo, hi, share in ranges)
+    per_hit = max(rolled - defense, combat.minimum_damage(level))
+    return per_hit * hit_chance(p.values.attack_rate, defense_rate) / interval
+
+
+def damage_rate(p, defense=0, defense_rate=0, skill=None, life=None):
+    """Damage per second p's player does to a target of defense and defense rate with skill, the weapon in between
+    the casts its mana doesn't allow: over a hunt, the casts its regeneration gives; with the target's life, over
+    one fight that starts with POOL of its mana."""
+    weapon = landed(p, *attack(p), defense, defense_rate, p.level)
+    if skill is None:
+        return weapon
+    ranges, interval = attack(p, skill)
+    cast = landed(p, ranges, interval, defense, defense_rate, p.level)
+    if not skill.mana or cast <= 0:
+        return cast
+    mana = mana_rate(p)
+    if life is not None:
+        t = life / cast  # the fight casting all the way
+        mana += p.max_mana * POOL / t
+    share = min(1.0, mana * interval / skill.mana)  # of the time casting
+    return share * cast + (1 - share) * weapon
+
+
+@dataclass
+class Fight:
+    """What fighting a monster type costs a bot and brings it, on average."""
+    kill_time: float  # seconds of swings or casts over a hunt, the casts its mana regeneration allows
+    fight_time: float  # seconds of one fight, it starts with POOL of its mana
+    dps: float  # life per second it takes while it fights back (monsters that look for players)
+    exp: float
+    ok: bool  # killed in time in one fight for no more life than the bot's risk allows
+    deadly: bool  # it looks, and one fight with it would take about all the bot's life
+
+    @property
+    def damage(self):
+        """Life a kill takes over a hunt."""
+        return self.dps * self.kill_time if self.dps else 0.0
+
+    @property
+    def taken(self):
+        """Life one fight takes."""
+        return self.dps * self.fight_time if self.dps else 0.0
 
 
 def fight(p, info, exp_rate=1.0, skill=None, risk=0.5):
     """A fight of p's player against a monster of MonsterInfo info, with skill (SkillInfo) or the weapon."""
     v = p.values
-    ranges, interval = attack(p, skill)
-    rolled = sum((lo + hi) / 2 * share / 100 for lo, hi, share in ranges)
-    per_hit = max(rolled - info.defense, combat.minimum_damage(p.level))
-    kill_time = info.life / (per_hit * hit_chance(v.attack_rate, info.defense_rate)) * interval
+    # no damage at an attack rate equal to the defense rate
+    rate = damage_rate(p, info.defense, info.defense_rate, skill)
+    once = damage_rate(p, info.defense, info.defense_rate, skill, info.life)
+    kill_time = info.life / rate if rate > 0 else math.inf
+    fight_time = info.life / once if once > 0 else math.inf
     dps = 0.0
     if info.view_range > 0:
         taken = max((info.damage_min + info.damage_max) / 2 - v.defense, combat.minimum_damage(info.level))
         dps = hit_chance(info.attack_rate, v.defense_rate) * taken / max(info.attack_speed / 1000, 0.1)
     limit = p.max_life * (0.3 + 0.4 * risk)
     exp = experience.monster_exp(p.level, info.level, exp_rate, rng=_Mean)
-    return Fight(kill_time, dps, exp, ok=kill_time <= MAX_KILL_TIME and dps * kill_time <= limit,
-                 deadly=dps * min(kill_time, FIGHT_LIMIT) > p.max_life * DEADLY_LIFE)
+    return Fight(kill_time, fight_time, dps, exp, ok=fight_time <= MAX_KILL_TIME and dps * fight_time <= limit,
+                 deadly=dps * min(fight_time, FIGHT_LIMIT) > p.max_life * DEADLY_LIFE)
 
 
 def regen_rate(p):
@@ -185,25 +243,37 @@ def regen_rate(p):
         / combat.REGEN_INTERVAL
 
 
-def best_skill(game, p):
-    """The damaging skill p's player would hunt with: the most damage for its mana among those it knows and has the
-    mana for at all, None for the weapon."""
+def attack_skills(game, p):
+    """The skills p's player knows that hit one target (19): wizardry and weapon skills, not the area ones (1E),
+    the buffs and summons."""
     known = [game.skills[n] for n in p.skills if n is not None and n in game.skills]
-    damaging = [s for s in known if s.damage > 0 and s.radius == 0 and s.mana <= p.max_mana]
-    return max(damaging, key=lambda s: (s.damage, -s.mana, s.number), default=None)
+    return [s for s in known if s.radius == 0 and s.number not in casting.NO_DAMAGE and s.mana <= p.max_mana]
+
+
+def best_skill(game, p):
+    """The skill p's player would hunt with: the most damage per second over a hunt (with the swings its mana
+    doesn't allow) among those it knows and has the mana for at all, None when the weapon alone does more."""
+    best, most = None, damage_rate(p)
+    for s in sorted(attack_skills(game, p), key=lambda s: s.number):
+        rate = damage_rate(p, skill=s)
+        if rate > most:
+            best, most = s, rate
+    return best
 
 
 def worth(game, p, ground, grounds, fights, others=0):
     """
     Exp per second p's player would make on ground (its map's grounds around it count half) and the monster types
-    it would hunt for it, the band: of those it can kill, the most worth first while they add to it. fights: monster
-    type -> Fight. others: players hunting there already. (0, ()) when it can't hunt there.
+    it would hunt for it, the band: of those it can kill, the most worth first while they add to it. Those that look
+    for players and that it can't fight take their share of the time (it runs from them). fights: monster type ->
+    Fight. others: players hunting there already. (0, ()) when it can't hunt there.
     """
     counts, tiles = around(ground, grounds)
     if any(n >= DEADLY and fights[t].deadly for t, n in counts.items()):
         return 0.0, ()
     regen = regen_rate(p)
     killable = {t: n for t, n in counts.items() if fights[t].ok}
+    unfit = sum(n for t, n in counts.items() if not fights[t].ok and game.monster_info[t].view_range > 0)
 
     def per_kill(t, walk):
         """Seconds a kill of type t takes with the walk to it and the rest after it."""
@@ -228,7 +298,8 @@ def worth(game, p, ground, grounds, fights, others=0):
         v = value(by_worth[:i])
         if v > best:
             best, band = v, tuple(by_worth[:i])
-    return best, band
+    total = sum(killable.values())
+    return best * total / (total + unfit), band
 
 
 def fights_for(game, p, types, risk=0.5):
@@ -238,12 +309,12 @@ def fights_for(game, p, types, risk=0.5):
     return {t: fight(p, game.monster_info[t], rate, skill, risk) for t in types}
 
 
-def rank(game, p, grounds, travel=None, risk=0.5, rng=None, others=None, avoid=(), fights=None):
+def rank(game, p, grounds, travel=None, risk=0.5, rng=None, others=None, avoid=(), fights=None, horizon=HORIZON):
     """
     [(score, Ground, band)] of the grounds of a map (cell -> Ground) best first for p's player, band: the monster
-    types it would hunt there (worth). travel(ground): steps to it, None when it can't be reached; others(ground):
-    players there; avoid: ground keys left out; rng: the bot's own, for its liking; fights: fights_for the types of
-    grounds when the caller has them.
+    types it would hunt there (worth). travel(ground): steps to it, None when it can't be reached, weighed against
+    horizon seconds of hunting there; others(ground): players there; avoid: ground keys left out; rng: the bot's
+    own, for its liking; fights: fights_for the types of grounds when the caller has them.
     """
     if fights is None:
         fights = fights_for(game, p, {t for g in grounds.values() for t in g.counts}, risk)
@@ -259,7 +330,7 @@ def rank(game, p, grounds, travel=None, risk=0.5, rng=None, others=None, avoid=(
             steps = travel(g)
             if steps is None:
                 continue
-            value *= HORIZON / (HORIZON + steps * motor.STEP_TIME)
+            value *= horizon / (horizon + steps * motor.STEP_TIME)
         if rng is not None:
             value *= 1 + rng.uniform(-VARIETY, VARIETY)
         ranked.append((value, g, band))
@@ -267,8 +338,13 @@ def rank(game, p, grounds, travel=None, risk=0.5, rng=None, others=None, avoid=(
     return ranked
 
 
-def next_point(p):
-    """The stat (F3 06 number) the next level up point goes to: the one furthest below its share of the build."""
+def next_point(p, goal=None):
+    """The stat (F3 06 number) the next level up point goes to: one below the value goal (strength, agility,
+    vitality, energy, mup.bot.gear.goal) asks for, else the one furthest below its share of the build."""
+    if goal is not None:
+        for i, need in enumerate(goal):
+            if getattr(p, stats.STATS[i]) < need:
+                return i
     shares = BUILDS[p.class_type.base]
     base = p.class_info
     spent = [p.strength - base.strength, p.agility - base.agility, p.vitality - base.vitality,
