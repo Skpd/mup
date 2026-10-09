@@ -3,22 +3,23 @@ A bot's brain: it perceives what a client is shown and knows (its own character,
 it gets, the game's data files), never a monster's life, target or path or anything out of view. Every 0.5..1 s it
 picks the activity by priority (survive > spend points > items > level, mup.bot.activity) and steps it, with reflexes
 on top: a potion or a heal in a fight, the elf's buffs and summon. The career (mup.bot.career) picks the hunting
-ground, on its map or one the gates lead to; the gear (mup.bot.gear) what its items are worth. Everything it decides
-goes to the trace (BotManager.trace).
+ground, on its map or one the gates lead to; the gear (mup.bot.gear) what its items are worth; the town
+(mup.bot.town) when a trip to the NPCs is due and what it does there. Everything it decides goes to the trace
+(BotManager.trace).
 """
 import logging
 from collections import Counter
-from mup.bot import career, gear
-from mup.bot.activity import (Activity, Dead, Escape, Rest, SpendPoints, Equip, Loot, Restock, Spot, Travel, Hunt,
+from mup.bot import career, gear, town
+from mup.bot.activity import (Activity, Dead, Escape, Rest, SpendPoints, Equip, Loot, Trip, Spot, Travel, Hunt,
                               Idle, FAILED, LEVEL)
 from mup.bot.motor import AREA_REACH, AREA_TARGETS, TALK_REACH
-from mup.model.item import GRID, GroundItem, Item
+from mup.model.item import GRID, GroundItem
 from mup.model.monster import Monster
 from mup.model.player import CharacterClass
 from mup.packet.server import (SAction, SChaosClosed, SDurability, SInventory, SItemDeleted, SItemList, SKill,
-                               SLevelUp, SMapMove, SMoveItemResult, SPickUpResult, SPointResult, SRespawn,
-                               SSkillChange, STalk, SWarehouseClosed)
-from mup.server import casting, effect, ground as grounds, inventory, item as items, shop, summon
+                               SLevelUp, SMapMove, SMoveItemResult, SPickUpResult, SPointResult, SRepairResult,
+                               SRespawn, SSellResult, SSkillChange, STalk, SWarehouseClosed)
+from mup.server import casting, combat, effect, ground as grounds, inventory, summon
 from mup.server.world import distance
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,9 @@ POTION_REST = 0.5  # with a full stock of healing potions it rests below this sh
 LOOT_RANGE = 12  # tiles from it an item on the ground may lie that it goes for
 LOOT_TRIES = 2  # pick ups of an item before it is left there: refused in its owner time, once more after it
 ZEN = 0.05  # worth of zen on the ground, it takes no room
-RESTOCK_BELOW = 60  # arrows or bolts left it buys more below (mup.bot.activity.Restock)
+TRIP_LOOK = 5.0  # seconds its errands (mup.bot.town.errands) are kept before it looks again
+OFFER_TIME = 60.0  # seconds the best upgrade of the shops is kept, unless its items, values or zen change
+TRIP_ESCAPES = 2  # escapes on the way to town before the trip waits like a failed one
 DRAINED = 600.0  # seconds its kills on a ground count against it: the monsters respawn anywhere in their spawn area,
 # most of them away from the ground
 
@@ -68,7 +71,7 @@ class Brain:
         self.tries = Counter()  # monster cid -> failed paths
         self.attacked_by = {}  # monster cid -> when it last swung next to it
         self.kills = 0
-        self.kill_at = 0.0  # of its last kill, or when it picked its ground
+        self.hunted = 0.0  # seconds it hunted since its last kill or since it picked its ground
         self.killed_on = {}  # ground key -> times of its kills there, the last DRAINED seconds
         self.fights = {}  # monster type -> mup.bot.career.Fight at its level, values and items (fight)
         self.progress = None  # (exp, map, x, y) and when it changed, for the watchdog
@@ -86,8 +89,14 @@ class Brain:
         self.resume = False  # it looted or put on an item while hunting: it hunts on where it stands
         self.interrupted = None  # the activity the last switch dropped
         self.window = None  # the NPC window it was shown (30), STalk's kinds, until it closes
-        self.goods = {}  # shop slot -> the 4 item bytes of the goods of the shop it talks to (31)
-        self.restock_after = 0.0  # the next trip for arrows or bolts not before
+        self.talking = None  # the NPC it talked to last, whose window that is
+        self.goods = {}  # shop slot -> Item, the goods of the shop it talks to (31)
+        self.vault = {}  # vault slot -> Item, its vault's window (31)
+        self.trip_after = 0.0  # the next town trip not before
+        self.trip_escapes = 0  # escapes from the trips since the last one ended
+        self.refused_at = -1.0  # when the server last refused it a buy or a sale
+        self._errands = None  # (when, (due, along)) of mup.bot.town.errands
+        self._offer = None  # (when, budget, mup.bot.town.Offer) of the best upgrade in the shops
 
     @property
     def player(self):
@@ -123,7 +132,7 @@ class Brain:
                 if isinstance(self.activity, Hunt) and self.activity.target is not None \
                         and packet.cid == self.activity.target.cid:
                     self.kills += 1
-                    self.kill_at = now
+                    self.hunted = 0.0
                     if self.ground is not None:
                         self.killed_on.setdefault(self.ground.key, []).append(now)
                     self.event('kill', target=packet.cid)
@@ -148,11 +157,18 @@ class Brain:
                     self.changed()
                 elif isinstance(packet, SItemDeleted):
                     self.dirty = True
+            elif isinstance(packet, (SSellResult, SRepairResult)):
+                self.changed()  # its items, their durability
             elif isinstance(packet, STalk):
                 self.window, self.goods = packet.window, {}
             elif isinstance(packet, SItemList):
-                if self.window == STalk.SHOP and packet.kind == SItemList.SHOP:
-                    self.goods = {e['slot']: e['item'] for e in packet.entries}
+                if packet.kind == SItemList.SHOP and self.window in (STalk.SHOP, STalk.WAREHOUSE):
+                    found = {e['slot']: gear.decoded(c.server, e['item']) for e in packet.entries}
+                    found = {slot: i for slot, i in found.items() if i is not None}
+                    if self.window == STalk.SHOP:
+                        self.goods = found
+                    else:
+                        self.vault = found
             elif isinstance(packet, (SWarehouseClosed, SChaosClosed)):
                 self.window, self.goods = None, {}
             elif isinstance(packet, SRespawn):
@@ -174,17 +190,35 @@ class Brain:
         if picked is not None:
             c.motor.picked = None
             self.picked(*picked, now)
-        if c.motor.bought is not None:
-            if c.motor.bought:
+        motor = c.motor
+        if motor.bought is not None:
+            if motor.bought is False:
+                self.refused_at = now
+                self.event('not bought')
+            else:
                 c.counts['bought'] += 1
-            self.event('bought' if c.motor.bought else 'not bought')
-            c.motor.bought = None
+                c.counts['spent'] += motor.bought
+            motor.bought = None
+            self._errands = self._offer = None
+        if motor.sold is not None:
+            if motor.sold is False:
+                self.refused_at = now
+                self.event('not sold')
+            else:
+                c.counts['sold'] += 1
+                c.counts['sold zen'] += motor.sold
+            motor.sold = None
+        if motor.repaired is not None:
+            c.counts['repairs'] += 1
+            c.counts['repair zen'] += motor.repaired
+            motor.repaired = None
 
     def changed(self):
         """Its values, skills or items changed: the fights and the worth of items are weighed again."""
         self.fights = {}
         self.worth = {}
         self.dirty = True
+        self._errands = self._offer = None
 
     def entered(self, map_id):
         """It is on map_id (a gate, a respawn): the cells that would kill it there."""
@@ -363,6 +397,10 @@ class Brain:
                                                      self.personality.risk, source)
         return v
 
+    def worth_of(self, item, source=None):
+        """What item is worth to it, to use or to sell (mup.bot.gear.sale)."""
+        return max(self.value(item, source), gear.sale(item))
+
     def best_change(self):
         """mup.bot.gear.best_change of its grid, made again when its items or values changed."""
         self._update()
@@ -387,13 +425,13 @@ class Brain:
                      if slot >= GRID and gear.learnable(game, p, item)), None)
 
     def loot_value(self, g):
-        """What ground item g is worth to it: zen a little, an item by the gear."""
-        return ZEN if g.item is None else self.value(g.item)
+        """What ground item g is worth to it: zen a little, an item by the gear, to use or to sell."""
+        return ZEN if g.item is None else self.worth_of(g.item)
 
     def junk(self, than):
         """The grid slot of its item worth least, if less than than: what it drops to make room. None."""
         p = self.player
-        found = [(self.value(i, slot), -i.info.width * i.info.height, slot)
+        found = [(self.worth_of(i, slot), -i.info.width * i.info.height, slot)
                  for slot, i in p.inventory.items() if slot >= GRID]
         least = min(found, default=None)
         return least[2] if least is not None and least[0] < than else None
@@ -433,73 +471,55 @@ class Brain:
         self.looted[g] = tries + 1, now + grounds.OWNER_TIME  # another's for a while, the server's rule
         self.event('not picked', ground_item=g.id, tries=tries + 1)
 
-    def ammunition_needed(self, now):
-        """The type of the arrows or bolts it goes to buy: it has a bow or crossbow it may wear and would shoot
-        with, fewer than RESTOCK_BELOW of them and the zen for a stack, a shop that sells them is on its map or one
-        the gates lead to. None."""
-        if now < self.restock_after:
-            return None
-        p = self.player
-        for slot, item in sorted(p.inventory.items()):
-            ammo = gear.ammunition_for(item)
-            if ammo is None or gear.shots(p, ammo[0]) >= RESTOCK_BELOW or not inventory.class_allowed(p, item.info):
-                continue
-            r = items.requirements(item)
-            if p.level < r.level or p.strength < r.strength or p.agility < r.agility or p.energy < r.energy:
-                continue
-            if slot >= GRID and self.value(item, slot) <= 0:
-                continue
-            info = self.c.server.item_info[ammo[0]]
-            if p.zen < shop.value(Item(info, durability=info.durability)) or self.seller(ammo[0]) is None:
-                continue
-            return ammo[0]
-        return None
+    # town
 
-    def seller(self, ammo):
-        """(NPC type, Spot next to it) of the shop that sells ammo nearest: of its map, else of the maps the gates
-        lead to by the steps through them. The NPCs' spots and goods are the game's data. None."""
+    def errands(self, now, again=False):
+        """mup.bot.town.errands, kept for TRIP_LOOK seconds or until its items, values or level change; again: looked
+        at anew."""
+        if again or self._errands is None or now - self._errands[0] > TRIP_LOOK:
+            self._errands = now, town.errands(self, now)
+        return self._errands[1]
+
+    def trip_due(self, now):
+        """A town trip is due: an errand is, a trip isn't waiting."""
+        return now >= self.trip_after and bool(self.errands(now)[0])
+
+    def upgrade(self, now, budget):
+        """mup.bot.town.offer for budget, kept for OFFER_TIME seconds while the budget pays for it and didn't grow by
+        a tenth, or until its items, values or level change."""
+        kept = self._offer
+        if kept is None or now - kept[0] > OFFER_TIME or budget > kept[1] * 1.1 or \
+                kept[2] is not None and kept[2].price > budget:
+            self._offer = kept = now, budget, town.offer(self, budget)
+        return kept[2]
+
+    def map_steps(self):
+        """Map -> steps along the best route there, for the maps the gates lead to from where it stands."""
         c, p = self.c, self.player
-        manager = c.manager
-        found = manager.sellers.get(ammo, ())
-        here = [(distance(x, y, p.x, p.y), npc_type, m, x, y) for npc_type, m, x, y in found if m == p.map_id]
-        if here:
-            _, npc_type, m, x, y = min(here)
-        else:
-            routes = manager.flows.routes(p.map_id, p.x, p.y, p.level,
-                                          p.class_type.base == CharacterClass.MAGIC_GLADIATOR, self.blocked)
-            steps = {}
-            for r in routes.values():
-                m = c.server.gates[r.arrival].map_id
-                steps[m] = min(steps.get(m, r.steps), r.steps)
-            there = [(steps[m], npc_type, m, x, y) for npc_type, m, x, y in found if m in steps]
-            if not there:
-                return None
-            _, npc_type, m, x, y = min(there)
-        walkable = manager.flows.walkable(m)
-        tiles = [(x + dx, y + dy) for dy in range(-TALK_REACH, TALK_REACH + 1)
-                 for dx in range(-TALK_REACH, TALK_REACH + 1) if (dx, dy) != (0, 0) and walkable(x + dx, y + dy)]
-        return (npc_type, Spot(m, ('npc', npc_type), tiles)) if tiles else None
+        routes = c.manager.flows.routes(p.map_id, p.x, p.y, p.level,
+                                        p.class_type.base == CharacterClass.MAGIC_GLADIATOR, self.blocked)
+        steps = {}
+        for r in routes.values():
+            m = c.server.gates[r.arrival].map_id
+            steps[m] = min(steps.get(m, r.steps), r.steps)
+        return steps
 
-    def offer(self, ammo):
-        """(slot, price, Item) of the stack of ammo it buys from the shop it talks to: the best level of which
-        Restock.STACKS cost at most half its zen, else the cheapest it can pay. None."""
-        game, p = self.c.server, self.player
-        offers = []
-        for slot, data in sorted(self.goods.items()):
-            t = data[0] | (data[3] >> 7) << 8
-            if t != ammo or t not in game.item_info:
-                continue
-            item = Item(game.item_info[t], level=data[1] >> 3 & 0x0F, durability=data[2])
-            offers.append((item.level, shop.value(item), slot, item))
-        rich = [o for o in offers if o[1] * Restock.STACKS <= p.zen // 2]
-        if rich:
-            level, price, slot, item = max(rich, key=lambda o: (o[0], -o[2]))
-            return slot, price, item
-        cheap = [o for o in offers if o[1] <= p.zen]
-        if not cheap:
-            return None
-        level, price, slot, item = min(cheap, key=lambda o: (o[1], o[2]))
-        return slot, price, item
+    def spot(self, n):
+        """The Spot next to mup.bot.town.Npc n it walks to before it talks: the tiles within TALK_REACH it walks on."""
+        walkable = self.c.manager.flows.walkable(n.map_id)
+        tiles = [(n.x + dx, n.y + dy) for dy in range(-TALK_REACH, TALK_REACH + 1)
+                 for dx in range(-TALK_REACH, TALK_REACH + 1) if (dx, dy) != (0, 0) and walkable(n.x + dx, n.y + dy)]
+        return Spot(n.map_id, ('npc', n.type_id, n.x, n.y), tiles)
+
+    def npc_near(self, n):
+        """The NPC in its view that mup.bot.town.Npc n is, None."""
+        return next((o for o in self.c.view if isinstance(o, Monster) and o.npc and o.type_id == n.type_id
+                     and o.map_id == n.map_id and (o.spawn.xs.start, o.spawn.ys.start) == (n.x, n.y)), None)
+
+    def talk(self, npc):
+        """30 to npc next to it: the window it opens comes as the answer."""
+        self.talking, self.window, self.goods = npc, None, {}
+        self.c.motor.talk(npc)
 
     # reflexes
 
@@ -551,6 +571,8 @@ class Brain:
     def tick(self, now):
         if self.last_tick is not None and self.activity is not None:
             self.c.counts['time ' + self.activity.name] += now - self.last_tick
+            if isinstance(self.activity, Hunt):
+                self.hunted += now - self.last_tick
         self.last_tick = now
         if now >= self.next_think_at:
             self.next_think_at = now + self.rng.uniform(*THINK)
@@ -568,7 +590,7 @@ class Brain:
                 self.switch(want(self, now), now)
         elif a is None:
             self.switch(self.level_activity(now), now)
-        elif isinstance(a, (Travel, Loot, Equip, Restock)) and self.ground is not None \
+        elif isinstance(a, (Travel, Loot, Equip, Trip)) and self.ground is not None \
                 and self.attacker(now) is not None:
             self.switch(Hunt(self, now, self.ground, self.band), now)
         a = self.activity
@@ -582,7 +604,7 @@ class Brain:
     def wanted(self, now):
         """The class of the most urgent activity it wants, None when it may level. It runs from what it can't fight,
         rests below its threshold and when a hunt found nothing it has the life for; with no monster at it, it picks
-        up what it wants, wears its upgrades and buys arrows or bolts for its bow."""
+        up what it wants, wears its upgrades and goes to town when a trip is due."""
         p = self.player
         if p.dead:
             return Dead
@@ -592,13 +614,15 @@ class Brain:
             return Rest
         if p.free_points > 0:
             return SpendPoints
+        if combat.ammunition(p) is False and self.best_change() is not None:
+            return Equip  # a bow without arrows can't fight back: off with it, or a stack in the hand, at once
         if self.attacker(now) is None:
             if self.loot(now) is not None:
                 return Loot
             if self.scroll() is not None or self.best_change() is not None:
                 return Equip
-            if self.ammunition_needed(now) is not None:
-                return Restock
+            if self.trip_due(now):
+                return Trip
         return None
 
     def level_activity(self, now):
@@ -621,7 +645,13 @@ class Brain:
         self.interrupted = self.activity
         self.activity = activity
         self.event('pick', **activity.details())
-        if isinstance(activity, Escape) and self.ground is not None:
+        if isinstance(activity, Escape) and isinstance(self.interrupted, Trip):
+            self.trip_escapes += 1  # something in the way to town: not the ground's
+            if self.trip_escapes >= TRIP_ESCAPES:
+                self.trip_escapes = 0
+                self.trip_after = now + Trip.PAUSE
+                self.event('give up trip', why='escapes')
+        elif isinstance(activity, Escape) and self.ground is not None:
             self.escapes_on[self.ground.key] += 1
             if self.escapes_on[self.ground.key] >= ESCAPES:
                 self.escapes_on.pop(self.ground.key)
@@ -634,6 +664,8 @@ class Brain:
         self.activity = None
         self.resume = isinstance(a, (Loot, Equip)) and isinstance(self.interrupted, Hunt)
         self.c.motor.stop()
+        if isinstance(a, Trip):
+            self.trip_escapes = 0
         if a.priority == LEVEL and status == FAILED and self.ground is not None:
             self.give_up_ground(now, why)
         if isinstance(a, Dead) and self.ground is not None and self.deaths_on[self.ground.key] >= DEATHS:
@@ -665,6 +697,7 @@ class Brain:
         fights = self.fights_with({t for m in maps for g in manager.grounds.get(m, {}).values() for t in g.counts})
         self.worth = {}
         self.dirty = True  # the band its items are weighed against may change
+        self._errands = self._offer = None
         here = flows.from_tile(p.map_id, p.x, p.y, self.blocked)
         avoid = {k for k, until in self.avoid.items() if until > now}
         players = [o.player for o in c.view if not isinstance(o, (Monster, GroundItem)) and o.player is not None]
@@ -704,7 +737,7 @@ class Brain:
         if stored is not None and stored[0] >= value * STAY:
             value, ground, self.band = stored
         if self.ground is None or ground.key != self.ground.key:
-            self.kill_at = now
+            self.hunted = 0.0
         self.ground = ground
         self.event('ground', ground=list(self.ground.key), center=list(self.ground.center),
                    worth=round(value, 3), band=list(self.band))
@@ -724,12 +757,18 @@ class Brain:
         return best
 
     def way(self, ground):
-        """The flow field it walks down towards ground from where it stands around the cells it keeps out of: the
-        ground's on its map, else the one to the first gate of the best route there. None when there is no way."""
+        """The flow field it walks down towards ground from where it stands around the cells it keeps out of (but
+        those around an NPC it goes to): the ground's on its map, else the one to the first gate of the best route
+        there. None when there is no way."""
         c, p = self.c, self.player
         flows = c.manager.flows
+        self.keep_out()  # from where it stands now
         if ground.map_id == p.map_id:
-            return flows.field(p.map_id, ('ground',) + ground.key, lambda: ground.tiles, self.blocked)
+            blocked = self.blocked
+            if isinstance(ground, Spot):  # an NPC: players walk there, it runs from what shows up on the way
+                cx, cy = career.cell_of(*ground.center)
+                blocked = blocked - {(cx + dx, cy + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+            return flows.field(p.map_id, ('ground',) + ground.key, lambda: ground.tiles, blocked)
         routes = flows.routes(p.map_id, p.x, p.y, p.level, p.class_type.base == CharacterClass.MAGIC_GLADIATOR,
                               self.blocked)
         deadly = self.deadly_of(ground.map_id)

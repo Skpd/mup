@@ -4,12 +4,12 @@ think and returns None while it goes on, DONE or FAILED when it ended; past its 
 """
 from dataclasses import dataclass
 from typing import List, Tuple
-from mup.bot import career, gear
+from mup.bot import career, gear, town
 from mup.bot.motor import TALK_REACH
-from mup.model.monster import Monster
+from mup.bot.town import AMMO, MANA, POTIONS, REPAIR, SELL, UPGRADE, VAULT
 from mup.packet.client import CAddPoint
 from mup.packet.server import STalk
-from mup.server import ai, inventory
+from mup.server import ai, inventory, item as items, shop
 from mup.server.path import find_path
 from mup.server.world import VIEW_RANGE, distance
 
@@ -73,6 +73,8 @@ def flee(activity, threats, now):
         if motor.flow is not safe:
             motor.follow(safe)
         return
+    if motor.target is not None or motor.item is not None and motor.waiting is None:
+        motor.stop()  # the attack or pick up it was on
     if motor.busy(now):
         return
     walkable = c.walkable
@@ -180,8 +182,8 @@ class Loot(Activity):
 class Equip(Activity):
     """
     Learns the scrolls and orbs it can (26), wears the upgrades of its grid (mup.bot.gear.best_change) one 24 at a
-    time: what has to leave the slot and the hands goes to the grid first, or on the ground when it is worth nothing
-    more or there is no room, then the piece goes on.
+    time: what has to leave the slot and the hands goes to the grid first (to keep or to sell), or on the ground when
+    it is worth nothing more or there is no room, then the piece goes on.
     """
     name = 'equip'
     priority = ITEMS
@@ -208,7 +210,8 @@ class Equip(Activity):
                 continue
             after = gear.trial(game, p, change.after)
             free = inventory.free_slot(p.inventory, piece.info)
-            if free is not None and gear.value(game, after, piece, brain.types(), brain.personality.risk) > 0:
+            if free is not None and (gear.value(game, after, piece, brain.types(), brain.personality.risk) > 0
+                                     or gear.sale(piece) > 0):
                 motor.move_item(s, free)
                 brain.event('take off', item=piece.info.name, slot=s)
             else:
@@ -243,74 +246,80 @@ class Spot:
         return map_id == self.map_id and (x, y) in self.tiles
 
 
-class Restock(Activity):
+class Trip(Activity):
     """
-    Buys arrows or bolts for its bow or crossbow (mup.bot.brain.Brain.ammunition_needed) from the nearest shop that
-    sells them, on its map or through the gates: walks next to the NPC, talks to it (30), buys stacks (32) one at a
-    time, the best level it can afford (Brain.offer), until it has STACKS more or the zen runs out, then goes. The
-    client sends nothing when a shop window closes, the server closes it when the player walks off. Equip wears
-    them with the bow. A trip that failed isn't tried again for a while.
+    A town trip (mup.bot.town): the errands due and those it does along with them, at the stops of the plan in
+    order. At each it walks next to the NPC and talks to it (30). At a shop it sells what it doesn't use (33, one at a
+    time), repairs at a smith's (34: all, else the most worn pieces it can pay), buys (32, one at a time) potions,
+    arrows or bolts and an upgrade, each within what the errands before it leave (town.reserve). At the vault it
+    stores its jewels (24) and closes it (82). The client sends nothing when a shop window closes, the server closes
+    it when the player walks off. Equip wears what it bought afterwards. A trip that failed or left an errand that
+    was due undone isn't made again for a while.
     """
-    name = 'restock'
+    name = 'trip'
     priority = ITEMS
     timeout = 900.0
-    TALK_WAIT = 3.0  # seconds for the shop window after 30
-    STACKS = 4  # stacks it buys on a trip, of the best level STACKS of which cost at most half its zen
+    TALK_WAIT = 3.0  # seconds for the window after 30
     PAUSE = 300.0  # seconds after a trip that failed before the next
 
     def __init__(self, brain, now):
         super().__init__(brain, now)
-        self.ammo = brain.ammunition_needed(now)
-        found = brain.seller(self.ammo) if self.ammo is not None else None
-        self.npc_type, self.spot = found if found is not None else (None, None)
-        self.walk = Travel(brain, now, self.spot) if self.spot is not None else None
+        self.due, self.errands = brain.errands(now)
+        self.stops = town.plan(brain, self.due, self.errands)
+        self.index = -1
+        self.walk = None
         self.talked_at = None
-        self.bought = 0
+        self.asked = set()  # slots it asked the smith to repair at this stop
+        self.upgraded = False
+        self.c.counts['trips'] += 1
+        self.next_stop(now)
 
     def details(self):
-        if self.spot is None:
-            return {}
-        return {'ammo': self.c.server.item_info[self.ammo].name, 'npc': self.npc_type, 'map': self.spot.map_id,
-                'to': list(self.spot.center)}
+        return {'due': sorted(self.due), 'stops': [[s.npc.type_id, s.npc.map_id, *sorted(s.errands)]
+                                                   for s in self.stops]}
 
     def fail(self, why):
-        self.brain.restock_after = self.c.server.now + self.PAUSE
+        self.brain.trip_after = self.c.server.now + self.PAUSE
         return super().fail(why)
+
+    @property
+    def stop(self):
+        return self.stops[self.index] if self.index < len(self.stops) else None
+
+    def next_stop(self, now):
+        self.index += 1
+        self.talked_at = None
+        self.asked = set()
+        self.walk = None
+        while self.stop is not None and not self.needed(self.stop):
+            self.index += 1
+        if self.stop is not None:
+            self.walk = Travel(self.brain, now, self.brain.spot(self.stop.npc))
 
     def step(self, now):
         brain, motor, p = self.brain, self.motor, self.player
-        if self.walk is None:
-            return self.fail('no shop')
+        if not self.stops:
+            return self.fail('nowhere')
+        if brain.refused_at >= self.started:
+            return self.fail('refused')
+        stop = self.stop
+        if stop is None:
+            return self.done(now)
         if motor.handling():
             return None
-        if brain.window == STalk.SHOP and brain.goods:
-            if self.bought >= self.STACKS or gear.shots(p, self.ammo) >= self.STACKS * self.stack():
-                return DONE
-            offer = brain.offer(self.ammo)
-            if offer is None:
-                return DONE if self.bought else self.fail('no zen')
-            slot, price, item = offer
-            if inventory.free_slot(p.inventory, item.info) is None:
-                junk = brain.junk(gear.POTION)
-                if junk is None:
-                    return DONE if self.bought else self.fail('no room')
-                name = p.inventory[junk].info.name
-                if motor.drop(junk):
-                    brain.event('drop', item=name, room_for=item.info.name)
-                return None
-            if motor.buy(slot):
-                self.bought += 1
-                brain.event('buy', item=item.info.name, level=item.level, price=price)
+        npc = brain.npc_near(stop.npc)
+        if brain.window is not None and npc is not None and brain.talking is npc:
+            if not self.act(stop):
+                self.next_stop(now)
             return None
         if self.talked_at is not None:
             if now - self.talked_at < self.TALK_WAIT:
                 return None
-            return self.fail('no shop window')
-        npc = next((o for o in self.c.view if isinstance(o, Monster) and o.npc and o.type_id == self.npc_type), None)
+            return self.fail('no window')
         if npc is not None and p.map_id == npc.map_id and distance(p.x, p.y, npc.x, npc.y) <= TALK_REACH \
                 and not motor.walking(now):
             motor.stop()
-            motor.talk(npc)
+            brain.talk(npc)
             self.talked_at = now
             return None
         status = self.walk.step(now)
@@ -320,8 +329,140 @@ class Restock(Activity):
             return self.fail('nobody there')
         return None
 
-    def stack(self):
-        return self.c.server.item_info[self.ammo].durability
+    def done(self, now):
+        """The last stop: done, but a due errand it couldn't do waits like a failed trip."""
+        p = self.player
+        undone = {SELL: lambda: town.free_tiles(p) < town.FULL and town.junk(self.brain),
+                  REPAIR: lambda: town.worn(p, town.REPAIR_DUE, equipment=True),
+                  POTIONS: lambda: town.have(p, gear.HEALING) < town.LOW,
+                  AMMO: self.short_of_ammo,
+                  UPGRADE: lambda: not self.upgraded,
+                  VAULT: lambda: town.free_tiles(p) < town.FULL and town.jewels(p)}
+        left = [k for k in self.due if undone[k]()]
+        if left:
+            self.brain.trip_after = now + self.PAUSE
+            self.brain.event('undone', errands=sorted(left))
+        return DONE
+
+    def needed(self, stop):
+        """Something is left to do at stop."""
+        p, kinds = self.player, stop.errands
+        if stop.npc.shop is None:
+            return VAULT in kinds and bool(town.jewels(p))
+        return any((SELL in self.errands and town.junk(self.brain, self.keep()),
+                    REPAIR in kinds and town.worn(p),
+                    POTIONS in kinds and town.have(p, gear.HEALING) < gear.STOCK,
+                    MANA in kinds and town.have(p, gear.MANA) < gear.STOCK,
+                    AMMO in kinds and self.short_of_ammo(),
+                    UPGRADE in kinds and not self.upgraded))
+
+    def keep(self):
+        """Types it doesn't sell on this trip: the arrows or bolts it buys."""
+        return (self.errands[AMMO],) if AMMO in self.errands else ()
+
+    def short_of_ammo(self):
+        ammo = self.errands[AMMO]
+        return gear.shots(self.player, ammo) < town.STACKS * (self.c.server.item_info[ammo].durability or 1)
+
+    def act(self, stop):
+        """One request at stop's open window: True when it sent one, False when nothing is left there."""
+        brain, motor, p = self.brain, self.motor, self.player
+        if brain.window == STalk.WAREHOUSE:
+            return self.store()
+        if brain.window != STalk.SHOP or not brain.goods:
+            return False
+        if SELL in self.errands:
+            for slot, item, gold in town.junk(brain, self.keep()):
+                if motor.sell(slot):
+                    brain.event('sell', item=item.info.name, price=gold)
+                return True
+        if REPAIR in stop.errands and stop.npc.type_id in shop.REPAIRERS and self.repair():
+            return True
+        for kind in (POTIONS, AMMO, UPGRADE, MANA):
+            if kind in stop.errands and self.buy(kind):
+                return True
+        return False
+
+    def repair(self):
+        """34 for all when it can pay for all, else for the most worn piece it can pay. True when it asked."""
+        brain, motor, p = self.brain, self.motor, self.player
+        pieces = [w for w in town.worn(p) if w[0] not in self.asked]
+        if not pieces:
+            return False
+        total = town.repair_cost(p)
+        if total <= p.zen:
+            self.asked |= {slot for slot, _ in town.worn(p, 1.0)}
+            motor.repair()
+            brain.event('repair', items=len(pieces), cost=total)
+            return True
+        for slot, item in sorted(pieces, key=lambda w: (w[1].durability / items.max_durability(w[1]), w[0])):
+            self.asked.add(slot)
+            gold = shop.repair_cost(item, 0)
+            if gold <= p.zen:
+                motor.repair(slot)
+                brain.event('repair', item=item.info.name, cost=gold)
+                return True
+        return False
+
+    def buy(self, kind):
+        """32 for what errand kind buys at this shop within its budget: a stack of potions, of arrows or bolts, the
+        upgrade. With no room for it, the item worth least to it (it sold its junk) goes on the ground first. True
+        when it sent one of them."""
+        brain, motor, p = self.brain, self.motor, self.player
+        goods = brain.goods
+        budget = p.zen - town.reserve(brain, self.errands, kind)
+        if kind in (POTIONS, MANA):
+            potion = gear.HEALING if kind == POTIONS else gear.MANA
+            if town.have(p, potion) >= gear.STOCK:
+                return False
+            choice = town.potion_choice(p, goods, potion, brain.personality.potion_below, budget)
+        elif kind == AMMO:
+            if not self.short_of_ammo():
+                return False
+            choice = town.ammo_choice(p, goods, self.errands[AMMO])
+            if choice is not None and choice[1] > budget:
+                choice = None
+        else:
+            o = self.errands[UPGRADE]
+            item = goods.get(o.slot)
+            if self.upgraded or item is None or (item.type, item.level) != (o.item.type, o.item.level) \
+                    or o.price > budget:
+                return False
+            choice = o.slot, o.price, item
+        if choice is None:
+            return False
+        slot, gold, item = choice
+        if inventory.free_slot(p.inventory, item.info) is None:
+            junk = brain.junk(gear.POTION if kind != UPGRADE else brain.worth_of(item))
+            if junk is None:
+                return False
+            name = p.inventory[junk].info.name
+            if motor.drop(junk):
+                brain.event('drop', item=name, room_for=item.info.name)
+            return True
+        if motor.buy(slot):
+            if kind == UPGRADE:
+                self.upgraded = True
+            brain.event('buy', item=item.info.name, level=item.level, price=gold)
+        return True
+
+    def store(self):
+        """24 for a jewel of its grid into the vault's first free slot, 82 when none is left. True when it moved
+        one."""
+        brain, motor, p = self.brain, self.motor, self.player
+        if VAULT in self.stop.errands:
+            for slot, item in town.jewels(p):
+                target = inventory.free_slot(brain.vault, item.info, inventory.WAREHOUSE)
+                if target is None:
+                    break
+                if motor.store(slot, target):
+                    brain.vault[target] = item
+                    self.c.counts['stored'] += 1
+                    brain.event('store', item=item.info.name, slot=target)
+                return True
+        motor.close_vault()
+        brain.window = None
+        return False
 
 
 class Travel(Activity):
@@ -374,13 +515,13 @@ class Hunt(Activity):
     Hunts on its ground: the monsters that attack it first, then those of its band nearest first, each until its 17
     or until it takes too long; a monster it can't reach is left alone after a few tries. With none in view it walks
     about the ground. Done when it wandered off the ground with nothing to fight or the brain wants another ground,
-    failed when it killed nothing for a long time since it picked the ground (mup.bot.brain.Brain.kill_at), hunts
-    of it before counting.
+    failed when it hunted a long time since it picked the ground without a kill (mup.bot.brain.Brain.hunted: the
+    hunts of it before count, the walks there, rests and town trips not).
     """
     name = 'hunt'
     timeout = None
     TARGET_TIME = 90.0  # seconds a target may take before it is left alone
-    IDLE = 90.0  # seconds without a kill before the ground is given up
+    IDLE = 90.0  # seconds of hunting without a kill before the ground is given up
     AWAY = 24  # tiles from the ground's center it may chase to
     ROAM = 12  # tiles to the spots it walks to
     ROAM_DRAWS = 8
@@ -424,7 +565,7 @@ class Hunt(Activity):
             return None
         if brain.repick:
             return DONE
-        if now - brain.kill_at > self.IDLE:
+        if brain.hunted > self.IDLE:
             return self.fail('nothing killed')
         if distance(p.x, p.y, *self.ground.center) > self.AWAY:
             return DONE
@@ -450,10 +591,16 @@ class Hunt(Activity):
 
 
 class Idle(Activity):
-    """Nowhere worth hunting: it stands, then looks again."""
+    """Nowhere worth hunting from where it stands: it walks to the safe zone, through the cells it keeps out of (they
+    may close it in where it fled to), stands, then looks again."""
     name = 'idle'
     timeout = 60.0
 
     def step(self, now):
-        self.motor.stop()
+        p, motor = self.player, self.motor
+        field = self.c.manager.flows.safe(p.map_id)
+        if self.c.server.maps[p.map_id].terrain.safe(p.x, p.y) or field.distance(p.x, p.y) is None:
+            motor.stop()
+        elif motor.flow is not field:
+            motor.follow(field)
         return None

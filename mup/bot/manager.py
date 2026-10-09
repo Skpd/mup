@@ -4,7 +4,7 @@ The bots of a game: logged in when the game server starts (bots_enabled) or by a
 bot's row with it. What the bots decide goes to trace (a callable of one dict per event) when it is set.
 """
 import logging
-from mup.bot import career
+from mup.bot import career, town
 from mup.bot.flow import Flows
 from mup.bot.session import BotSession
 from mup.packet.client import CJoinGame
@@ -22,7 +22,7 @@ class BotManager:
         self.tap = None  # LocalSession.tap of the sessions, a simulation's digest
         self.trace = None  # callable(dict) for the events of the bots
         self._grounds = None
-        self._sellers = None
+        self._npcs = None
         game.bots = self
 
     @property
@@ -33,17 +33,12 @@ class BotManager:
         return self._grounds
 
     @property
-    def sellers(self):
-        """Item type -> [(NPC type, map, x, y)] of the shops that sell it: the shops' goods and the NPCs' spots of the
-        game's data, laid out when first needed."""
-        if self._sellers is None:
-            found = {}
-            for npc in sorted(self.game.monsters.values(), key=lambda m: m.cid):
-                goods = self.game.shops.get(npc.type_id) if npc.npc else None
-                for t in sorted({i.type for i in goods.items.values()}) if goods is not None else ():
-                    found.setdefault(t, []).append((npc.type_id, npc.map_id, npc.spawn.xs.start, npc.spawn.ys.start))
-            self._sellers = found
-        return self._sellers
+    def npcs(self):
+        """[mup.bot.town.Npc] the bots go to: the shops and the vault keepers of the game's data, laid out when first
+        needed."""
+        if self._npcs is None:
+            self._npcs = town.town_npcs(self.game)
+        return self._npcs
 
     def login_all(self):
         bots = self.store.all()

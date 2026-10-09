@@ -5,8 +5,9 @@ until the target dies or leaves the view, as after a click on a monster (an area
 1D report a moment later); a walk that ends on an entrance gate sends 1C when the level allows, the map loaded
 answers F3 12. Items: a pick up order walks next to the item and sends 22; moves (24), drops (23) and uses (26) go
 out at once. Like the client, one 22 and one 24 at a time until their answer, no 26 and no 24 while item use is
-locked (docs/protocol-097.md, Items). Shops: a talk (30) from next to the NPC, buys (32) one at a time until the
-answer.
+locked (docs/protocol-097.md, Items). Shops: a talk (30) from next to the NPC, buys (32) and sales (33) one at a
+time until the answer, repairs (34, the server answers only what it did). The vault: items into its window with 24,
+its close button (82).
 
 A swing reaches as far as the client lets it (0x4650a0, code): 1.8 tiles from the middle of the hero's tile, 2.2 with
 a spear in the right hand, 6 with a bow in the left or a crossbow in the right.
@@ -21,9 +22,9 @@ from mup.model.item import GROUP_SIZE, LEFT_HAND, RIGHT_HAND
 from mup.model.monster import Monster
 from mup.model.player import CharacterClass
 from mup.packet.client import (CAreaHits, CAttack, CBuy, CDropItem, CMagicAOE, CMagicAttack, CMapReady, CMove,
-                               CMoveGate, CMoveItem, CPickUp, CTalk, CUseItem)
+                               CMoveGate, CMoveItem, CPickUp, CRepair, CSell, CTalk, CUseItem, CWarehouseClose)
 from mup.packet.server import (SBuyResult, SDropResult, SDurability, SItemDeleted, SLife, SMapMove, SMoveItemResult,
-                               SPickUpResult)
+                               SPickUpResult, SRepairResult, SSellResult)
 from mup.server import skill as skills
 from mup.server.path import direction, find_path
 from mup.server.world import distance
@@ -50,7 +51,17 @@ USE_PAUSE = 0.5  # seconds from the unlock of an item use to the next 26, a plac
 AREA_LAND = 0.4  # seconds from an area cast (1E) to its effect's 1D report, a placeholder
 AREA_REACH = 3  # tiles around the point an effect reports targets within: the client's reach 0.8..3 tiles
 AREA_TARGETS = 5  # per report, the client's limit
-PICK_UP, DROP, MOVE, BUY = 'pick up', 'drop', 'move', 'buy'  # the item requests it waits for the answer of
+PICK_UP, DROP, MOVE, BUY, SELL = 'pick up', 'drop', 'move', 'buy', 'sell'  # the item requests it waits for the
+# answer of
+
+
+def weapon_range(p):
+    """Tiles a swing of p's player reaches as the client measures them: MELEE, SPEAR or BOW by what the hands
+    hold."""
+    right, left = p.inventory.get(RIGHT_HAND), p.inventory.get(LEFT_HAND)
+    if left is not None and left.type in BOWS or right is not None and right.type in CROSSBOWS:
+        return BOW
+    return SPEAR if right is not None and right.type in SPEARS else MELEE
 
 
 class Motor:
@@ -75,7 +86,10 @@ class Motor:
         self.locked = False  # item use: a 26 waits for its unlock
         self.use_at = 0.0  # the next 26 may go out then
         self.picked = None  # (GroundItem, picked up) of the last 22 answer, for the brain
-        self.bought = None  # bought or not, the last 32 answer, for the brain
+        self.zen = 0  # its zen when the last 32, 33 or 34 went out
+        self.bought = None  # the zen it paid, False: refused; the last 32 answer, for the brain
+        self.sold = None  # the zen it got, False: refused; the last 33 answer, for the brain
+        self.repaired = None  # the zen it paid, the last 34 answer, for the brain
         self.area = None  # (when, skill list index, x, y) of an area cast whose effect it reports
         self.serial = 0  # of the area effects it reported
 
@@ -157,8 +171,39 @@ class Motor:
         if self.waiting is not None:
             return False
         self.waiting = BUY
+        self.zen = self.player.zen
         self.c.send(CBuy(slot=slot))
         return True
+
+    def sell(self, slot):
+        """33: sells the item of inventory slot to the shop it talks to (drops it on the shop's window). False when an
+        item request waits for its answer."""
+        if slot not in self.player.inventory or self.waiting is not None:
+            return False
+        self.waiting = SELL
+        self.zen = self.player.zen
+        self.c.send(CSell(slot=slot))
+        return True
+
+    def repair(self, slot=CRepair.ALL):
+        """34: repairs the item of inventory slot, ALL everything, at the smith it talks to. The server answers what
+        it did (2A, 34), nothing when it refuses."""
+        self.zen = self.player.zen
+        self.c.send(CRepair(slot=slot, own=0))
+
+    def store(self, slot, target):
+        """24: the item of inventory slot into slot target of the vault's window. False when it can't now."""
+        item = self.player.inventory.get(slot)
+        if item is None or self.handling():
+            return False
+        self.waiting = MOVE
+        self.c.send(CMoveItem(source_window=SMoveItemResult.INVENTORY, source=slot, item=item.encode(),
+                              target_window=SMoveItemResult.WAREHOUSE, target=target))
+        return True
+
+    def close_vault(self):
+        """82: the vault's close button."""
+        self.c.send(CWarehouseClose())
 
     def cast(self, number, target_cid, now):
         """19: skill number on target_cid now (a buff, a heal, a summon on itself) when its pace allows and it
@@ -192,7 +237,13 @@ class Motor:
             elif isinstance(packet, SBuyResult):
                 if self.waiting == BUY:
                     self.waiting = None
-                    self.bought = packet.slot != SBuyResult.FAILED
+                    self.bought = self.zen - self.player.zen if packet.slot != SBuyResult.FAILED else False
+            elif isinstance(packet, SSellResult):
+                if self.waiting == SELL:
+                    self.waiting = None
+                    self.sold = packet.money - self.zen if packet.result else False
+            elif isinstance(packet, SRepairResult):
+                self.repaired = self.zen - packet.money
             elif isinstance(packet, SLife) and packet.type == SLife.UNLOCK \
                     or isinstance(packet, (SItemDeleted, SDurability)) and packet.unlock:
                 if self.locked:
@@ -283,12 +334,8 @@ class Motor:
         self._walk(path[:SEGMENT], now)
 
     def weapon_range(self):
-        """Tiles a swing reaches as the client measures them: MELEE, SPEAR or BOW by what the hands hold."""
-        p = self.player
-        right, left = p.inventory.get(RIGHT_HAND), p.inventory.get(LEFT_HAND)
-        if left is not None and left.type in BOWS or right is not None and right.type in CROSSBOWS:
-            return BOW
-        return SPEAR if right is not None and right.type in SPEARS else MELEE
+        """Tiles a swing reaches as the client measures them (weapon_range)."""
+        return weapon_range(self.player)
 
     def walk_reach(self):
         """Tiles (a diagonal step one) from a target it walks to before it swings: all of them within the weapon's

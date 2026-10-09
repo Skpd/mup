@@ -8,20 +8,25 @@ A piece of equipment is worth what its character window would show with the piec
 (mup.bot.career): the share of exp per second it adds, the raw values (damage, defense, speeds) breaking ties. A
 piece at 0 durability gives nothing, a bow nothing without its arrows (weighed with a stack, they can be bought).
 One it can wear within a few levels counts part of its gain, the level up points go to it first (goal). Other items
-are worth what they do for it: potions while it carries few, the scrolls and orbs of skills it can learn, jewels
-(kept for trading in B2). The rest is junk, left on the ground and dropped when room is needed. The weights are
-mup's choices.
+are worth what they do for it: potions while it carries fewer than its stock, the scrolls and orbs of skills it can
+learn, jewels (kept for trading in B2). What it doesn't use is worth what a shop pays for it (sale), less than any
+use: it picks up what sells well for the room it takes and sells it in town (mup.bot.town). The rest is junk, left on
+the ground and dropped when room is needed. The weights are mup's choices.
 """
 import dataclasses
 from dataclasses import dataclass
 from typing import Optional, Tuple
-from mup.bot import career
+from mup.bot import career, motor
 from mup.model.item import ARROWS, BOLT, GRID, LEFT_HAND, RIGHT_HAND, RING, RING2, Item
 from mup.server import combat, inventory, item as items, shop, skill, stats
 from mup.server.inventory import AMMO
 
-POTION = 0.2  # a potion while it carries fewer than KEEP of the kind
-KEEP = 4  # potions of a kind (healing, mana) it carries, each takes a slot: they don't stack (M5)
+POTION = 0.2  # a potion while it carries fewer than STOCK of the kind
+STOCK = 9  # potions of a kind (healing, mana) it carries: 3 of the shops' stacks of 3 (they don't stack, M5)
+KEEP = 4  # healing potions that make a full stock for resting (mup.bot.brain.Brain.rest_below)
+SALE = 0.005  # worth of an item it doesn't use that sells for TILE_PRICE a tile of its grid or more, under UPGRADE
+TILE_PRICE = 100  # zen
+MIN_SALE = 50  # zen an item has to sell for to be worth picking up
 SKILL = 1.0  # a scroll or orb of a skill it can learn
 JEWEL = 0.5
 UPGRADE = 0.01  # the least a piece it would wear counts
@@ -31,6 +36,7 @@ TIE = 0.01  # weight of the raw values' change when the exp per second doesn't c
 SAME = 1e-9  # share of the exp per second a change has to make to count
 JEWELS = (shop.JEWEL_OF_BLESS, shop.JEWEL_OF_SOUL, shop.JEWEL_OF_LIFE, shop.JEWEL_OF_CHAOS)
 HEALING, MANA = 'healing', 'mana'
+SPACING = 8  # tiles from a kill to the next monster on a ground, walked between kills (shorter with a bow's reach)
 
 
 def potion_kind(item):
@@ -45,6 +51,33 @@ def potion_kind(item):
 def potions(p, kind):
     """Potions of kind in p's player's grid, (slot, Item) by slot."""
     return [(slot, i) for slot, i in sorted(p.inventory.items()) if slot >= GRID and potion_kind(i) == kind]
+
+
+def decoded(game, data):
+    """The Item of the 4 item bytes of a packet (docs/protocol-097.md, Items), what the client reads from them. None
+    for a type the game doesn't have."""
+    info = game.item_info.get(data[0] | (data[3] >> 7) << 8)
+    if info is None:
+        return None
+    return Item(info, level=data[1] >> 3 & 0x0F, durability=data[2], skill=bool(data[1] >> 7),
+                luck=bool(data[1] >> 2 & 1), option=data[1] & 3 | (data[3] >> 6 & 1) << 2, excellent=data[3] & 0x3F)
+
+
+def price(item):
+    """Zen a shop pays for item (the client's sell price), 0 for what the bot doesn't sell: quest items, the client
+    never does; jewels, it keeps them."""
+    if item.type in shop.QUEST_ITEMS or item.type in JEWELS:
+        return 0
+    return shop.value(item, shop.SELL)
+
+
+def sale(item):
+    """What item is worth to a bot that doesn't use it: its sell price per tile of the grid, SALE from TILE_PRICE,
+    nothing under MIN_SALE."""
+    gold = price(item)
+    if gold < MIN_SALE:
+        return 0.0
+    return SALE * min(1.0, gold / (item.info.width * item.info.height) / TILE_PRICE)
 
 
 def heal(p, item):
@@ -89,19 +122,22 @@ def trial(game, p, inv):
 
 def power(game, p, types, risk=0.5):
     """(exp per second, raw values) of p's player hunting the monster types: the mean over them of the exp of a
-    kill per second of fighting and resting after it (mup.bot.career.fight), nothing for those it can't kill; the
-    raw values are the damage of its hits (the hands it hits with), wizardry, defense, defense rate and speeds.
-    Nothing at all with a bow and no arrows: it can't attack."""
+    kill per second of walking to it (SPACING less the reach a bow adds), fighting and resting after it
+    (mup.bot.career.fight), nothing for those it can't kill; the raw values are the damage of its hits (the hands it
+    hits with), wizardry, defense, defense rate and speeds. Nothing at all with a bow and no arrows: it can't
+    attack."""
     if combat.ammunition(p) is False:
         return 0.0, 0.0
     rates = []
     if types:
         fights = career.fights_for(game, p, types, risk)
         regen = career.regen_rate(p)
+        walk = max(0.0, SPACING - (motor.weapon_range(p) - motor.MELEE)) * motor.STEP_TIME
         for t in sorted(types):
             f = fights[t]
             if f.ok:
-                rates.append(f.exp / (f.kill_time + max(0.0, f.damage - regen * f.kill_time) / regen))
+                fighting = f.kill_time + walk
+                rates.append(f.exp / (fighting + max(0.0, f.damage - regen * fighting) / regen))
             else:
                 rates.append(0.0)
     v = p.values
@@ -197,9 +233,18 @@ def change_for(p, item, slot, source=None):
 def best_change(game, p, types, risk=0.5, item=None, source=None):
     """The Change of the most gain: item (from grid slot source, None: from the ground) or, without an item, any
     piece of the grid. A bow whose arrows ran out gets a stack of the grid in the other hand (the client does that
-    on its own), without one it comes off. None when nothing makes it better."""
+    on its own), without one it comes off. None when nothing makes it better. Changes are ranked by the order gain
+    makes (the exp per second, the raw values on a tie), so two that add the same exp per second go by the raw
+    values, not by the slot: taking a piece off and wearing the best one again can't go round in circles."""
     now = power(game, p, types, risk)
-    best = None
+    best = best_power = None
+
+    def consider(out, wear, after):
+        nonlocal best, best_power
+        then = power(game, trial(game, p, after), types, risk)
+        if gain(now, then) > 0 and (best is None or gain(best_power, then) > 0):
+            best, best_power = Change(out, wear, after, gain(now, then)), then
+
     if item is None and combat.ammunition(p) is False:
         bow = LEFT_HAND if LEFT_HAND in p.inventory and p.inventory[LEFT_HAND].type in stats.LEFT_BOWS else RIGHT_HAND
         ammo, hand = ammunition_for(p.inventory[bow])
@@ -207,25 +252,24 @@ def best_change(game, p, types, risk=0.5, item=None, source=None):
         if stack is not None and hand not in p.inventory:
             after = {s: i for s, i in p.inventory.items() if s != stack[0]}
             after[hand] = stack[1]
-            best = Change((), ((stack[0], hand, stack[1]),), after, gain(now, power(game, trial(game, p, after),
-                                                                                     types, risk)))
+            consider((), ((stack[0], hand, stack[1]),), after)
         else:
-            after = {s: i for s, i in p.inventory.items() if s != bow}
-            best = Change((bow,), (), after, gain(now, power(game, trial(game, p, after), types, risk)))
-        if best.gain <= 0:
-            best = None
+            consider((bow,), (), {s: i for s, i in p.inventory.items() if s != bow})
     candidates = [(source, item)] if item is not None else [
         (slot, i) for slot, i in sorted(p.inventory.items()) if slot >= GRID]
     for src, i in candidates:
         for slot in slots_for(i):
             c = change_for(p, i, slot, src)
-            if c is None:
-                continue
-            after, out, wear = c
-            g = gain(now, power(game, trial(game, p, after), types, risk))
-            if g > 0 and (best is None or g > best.gain):
-                best = Change(out, wear, after, g)
+            if c is not None:
+                after, out, wear = c
+                consider(out, wear, after)
     return best
+
+
+def meets(p, item):
+    """p's player has the level and stats item asks for (what the client shows red otherwise)."""
+    r = items.requirements(item)
+    return p.level >= r.level and p.strength >= r.strength and p.agility >= r.agility and p.energy >= r.energy
 
 
 def raised(p, item):
@@ -262,7 +306,7 @@ VIRTUAL = 0xFF  # a grid slot that isn't one, for the stack of arrows a bow is w
 
 def armed(game, p, item):
     """p's player as it would be with a stack of the ammunition item shoots in its grid, when it has none: what a
-    bow or crossbow is worth to a bot that can buy them (mup.bot.activity.Restock)."""
+    bow or crossbow is worth to a bot that can buy them (mup.bot.town)."""
     ammo = ammunition_for(item)
     if ammo is None or any(i.type == ammo[0] for i in p.inventory.values()):
         return p
@@ -278,7 +322,7 @@ def shots(p, ammo):
 def value(game, p, item, types, risk=0.5, source=None):
     """
     What item is worth to p's player, 0 for junk: a piece it would wear the share it adds (at least UPGRADE), one it
-    can wear within AHEAD levels FUTURE of that; potions while it has fewer than KEEP of the kind (mana potions when
+    can wear within AHEAD levels FUTURE of that; potions while it has fewer than STOCK of the kind (mana potions when
     a skill takes mana); a scroll or orb it can learn; jewels. source: the item's grid slot, None on the ground.
     """
     kind = potion_kind(item)
@@ -286,7 +330,7 @@ def value(game, p, item, types, risk=0.5, source=None):
         if kind == MANA and not uses_mana(game, p):
             return 0.0
         have = sum(i.durability for slot, i in potions(p, kind) if slot != source)
-        return POTION if have < KEEP else 0.0
+        return POTION if have < STOCK else 0.0
     if skill.taught_by(item) is not None:
         return SKILL if learnable(game, p, item, ahead=True) else 0.0
     if item.type in JEWELS:

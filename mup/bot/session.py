@@ -19,7 +19,7 @@ class BotSession(LocalSession):
         self.bot = bot
         self.rng = random.Random(bot.seed)  # its own, so its choices don't take the game's draws
         self.tap = manager.tap
-        self.counts = Counter()  # kills, deaths, levels, stuck, errors, refused, 'time <activity>'
+        self.counts = Counter()  # kills, deaths, levels, stuck, errors, refused, trips, 'time <activity>', ...
         self.sent = Counter()  # packet class name -> sent
         self.motor = Motor(self)
         self.checker = Checker(self)

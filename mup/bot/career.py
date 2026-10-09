@@ -4,11 +4,12 @@ monster and spawn files, the gates) and its own character's values (the client's
 
 Hunting grounds are the spawns laid on CELL x CELL tile cells per map: area spawns spread over their tiles, single
 ones over their few. A ground's worth to a bot is the exp per second it would make there, counting half of the cells
-around: per kill the monster's exp, the time its swings or casts take and the walk to the next monster, the life
-the monsters that look for players take (rested back at the regeneration's pace), no more kills than the respawns
-allow. A ground with a monster that looks and would kill it in one fight is left out (a deadly cell: the bot doesn't
-walk through it either), so is one that only has monsters it can't kill in time. The walk there is taken off over a
-horizon of hunting.
+around: per kill the monster's exp, the time its swings or casts take and the walk to the next monster (shorter with
+a bow's reach), the life the monsters that look for players take (rested back at the regeneration's pace; one that
+comes at a bow walks the reach first, shot all the way), no more kills than the respawns allow. A ground with a
+monster that looks and would kill it in one fight is left out (a deadly cell: the bot doesn't walk through it
+either), so is one that only has monsters it can't kill in time. The walk there is taken off over a horizon of
+hunting.
 """
 import math
 from collections import defaultdict
@@ -37,7 +38,7 @@ POOL = 0.5  # share of its mana a fight starts with
 BUILDS = {
     CharacterClass.DARK_KNIGHT: (5, 2, 3, 0),
     CharacterClass.DARK_WIZARD: (1, 2, 2, 5),
-    CharacterClass.ELF: (2, 5, 1, 2),
+    CharacterClass.ELF: (1, 6, 2, 1),
     CharacterClass.MAGIC_GLADIATOR: (2, 3, 1, 4),
 }
 
@@ -207,34 +208,39 @@ class Fight:
     exp: float
     ok: bool  # killed in time in one fight for no more life than the bot's risk allows
     deadly: bool  # it looks, and one fight with it would take about all the bot's life
+    approach: float = 0.0  # seconds the monster walks to its reach before it hits back, shot all the way
 
     @property
     def damage(self):
         """Life a kill takes over a hunt."""
-        return self.dps * self.kill_time if self.dps else 0.0
+        return self.dps * max(0.0, self.kill_time - self.approach) if self.dps else 0.0
 
     @property
     def taken(self):
         """Life one fight takes."""
-        return self.dps * self.fight_time if self.dps else 0.0
+        return self.dps * max(0.0, self.fight_time - self.approach) if self.dps else 0.0
 
 
-def fight(p, info, exp_rate=1.0, skill=None, risk=0.5):
-    """A fight of p's player against a monster of MonsterInfo info, with skill (SkillInfo) or the weapon."""
+def fight(p, info, exp_rate=1.0, skill=None, risk=0.5, reach=motor.MELEE):
+    """A fight of p's player against a monster of MonsterInfo info, with skill (SkillInfo) or the weapon from reach
+    tiles (mup.bot.motor.weapon_range)."""
     v = p.values
     # no damage at an attack rate equal to the defense rate
     rate = damage_rate(p, info.defense, info.defense_rate, skill)
     once = damage_rate(p, info.defense, info.defense_rate, skill, info.life)
     kill_time = info.life / rate if rate > 0 else math.inf
     fight_time = info.life / once if once > 0 else math.inf
-    dps = 0.0
+    dps = approach = 0.0
     if info.view_range > 0:
         taken = max((info.damage_min + info.damage_max) / 2 - v.defense, combat.minimum_damage(info.level))
         dps = hit_chance(info.attack_rate, v.defense_rate) * taken / max(info.attack_speed / 1000, 0.1)
+        approach = max(0.0, reach - max(motor.MELEE, info.attack_range)) * info.move_speed / 1000
     limit = p.max_life * (0.3 + 0.4 * risk)
     exp = experience.monster_exp(p.level, info.level, exp_rate, rng=_Mean)
-    return Fight(kill_time, fight_time, dps, exp, ok=fight_time <= MAX_KILL_TIME and dps * fight_time <= limit,
-                 deadly=dps * min(fight_time, FIGHT_LIMIT) > p.max_life * DEADLY_LIFE)
+    hit = max(0.0, min(fight_time, FIGHT_LIMIT) - approach)
+    return Fight(kill_time, fight_time, dps, exp, ok=fight_time <= MAX_KILL_TIME
+                 and dps * max(0.0, fight_time - approach) <= limit,
+                 deadly=dps * hit > p.max_life * DEADLY_LIFE, approach=approach)
 
 
 def regen_rate(p):
@@ -281,9 +287,11 @@ def worth(game, p, ground, grounds, fights, others=0):
         fighting = f.kill_time + walk
         return fighting + max(0.0, f.damage - regen * fighting) / regen
 
+    shorter = motor.weapon_range(p) - motor.MELEE  # tiles a bow saves on the walk to the next monster
+
     def value(band):
         total = sum(killable[t] for t in band)
-        walk = math.sqrt(tiles / total) * motor.STEP_TIME
+        walk = max(0.0, math.sqrt(tiles / total) - shorter) * motor.STEP_TIME
         demand = total / sum(killable[t] * per_kill(t, walk) for t in band)
         supply = sum(killable[t] / (game.monster_info[t].regen_time + fights[t].kill_time) for t in band)
         return min(demand, supply / (1 + others)) * sum(killable[t] * fights[t].exp for t in band) / total
@@ -306,7 +314,8 @@ def fights_for(game, p, types, risk=0.5):
     """Monster type -> Fight of p's player against types, with its best skill."""
     skill = best_skill(game, p)
     rate = game.config.exp_rate
-    return {t: fight(p, game.monster_info[t], rate, skill, risk) for t in types}
+    reach = motor.weapon_range(p) if combat.ammunition(p) is not False else motor.MELEE
+    return {t: fight(p, game.monster_info[t], rate, skill, risk, reach) for t in types}
 
 
 def rank(game, p, grounds, travel=None, risk=0.5, rng=None, others=None, avoid=(), fights=None, horizon=HORIZON):

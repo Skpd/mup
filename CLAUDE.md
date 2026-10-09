@@ -43,13 +43,14 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   typed server packets in `inbox`, `recv_until`), `Hunter` (a puppet that hunts, a cheap policy for tests).
 - `mup/bot/` (`docs/bots.md`): `session.py` (`BotSession`, a `LocalSession` with a brain), `manager.py`
   (`BotManager`: logs bots in, drives them from the game tick, the trace), `motor.py` (the client's pace: walk
-  segments, attack orders and casts at the client's reach, area reports, gates, item requests, shops), `flow.py`
-  (flow fields per map and target, walk masks, routes over the gates), `career.py` (hunting grounds from the
-  spawns, fights from the client's formulas with skills and mana, class builds), `gear.py` (what items are worth to
-  a bot, the best change of its equipment, the stats a piece it will soon wear asks for), `brain.py` (perception,
-  priorities, reflexes: potions, buffs; the ground on its map or another, watchdog), `activity.py` (dead, escape,
-  rest, points, loot, equip, restock: arrows and bolts from a shop, travel, hunt, idle), `checker.py` (fair play:
-  errors and refusals), `account.py` (making and removing bots).
+  segments, attack orders and casts at the client's reach, area reports, gates, item requests, shops, the vault),
+  `flow.py` (flow fields per map and target, walk masks, routes over the gates), `career.py` (hunting grounds from
+  the spawns, fights from the client's formulas with skills, mana and a bow's reach, class builds), `gear.py` (what
+  items are worth to a bot to use or to sell, the best change of its equipment, the stats a piece it will soon wear
+  asks for), `town.py` (town trips: the errands due and along, the shops' goods and prices, potions, upgrades, the
+  stops), `brain.py` (perception, priorities, reflexes: potions, buffs; the ground on its map or another, watchdog),
+  `activity.py` (dead, escape, rest, points, loot, equip, trip: sell, repair, buy, the vault; travel, hunt, idle),
+  `checker.py` (fair play: errors and refusals), `account.py` (making and removing bots).
 - `mup/model/` dataclasses. `mup/repository/`: SQLite storage (`database.py` schema migrations, account, character,
   guild and bot repositories). Characters in game live in memory and are saved by `GameServer.save`.
 - `mup/common/crypt.py`: C3/C4 SimpleModulus, C1/C2 xor chain (`extract` / `pack`), login field xor.
@@ -79,15 +80,16 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   points, skills (scrolls, area hits, poison, teleport, weapon skills, an elf's buff, arrows, summons), monsters
   chasing and killing, respawn and a gate, NPCs (shops, wear and repair, the vault across a restart, a jewel, a
   mix, a trap), whispers, a party sharing a kill and trades, player kills, the quests, a guild and a Devil Square
-  round, and last a bot made with `bin/account.py` hunting and wearing a drop after a restart with bots enabled, one
-  function per area. Run it after every change and extend it with every feature. It checks raw
-  offsets from the doc, never the packet definitions, so a wrong definition fails it.
+  round, and last a bot made with `bin/account.py` buying potions from Amy with its zen, hunting and wearing a drop
+  after a restart with bots enabled, one function per area. Run it after every change and extend it with every
+  feature. It checks raw offsets from the doc, never the packet definitions, so a wrong definition fails it.
 - `./venv/bin/python tests/sim.py`: the game in process (`mup/sim.py`) on tests/client.py's test world, about 10 s:
   the same seed gives the same game (also under another `PYTHONHASHSEED`), what tests/client.py would wait for in
   game time (respawns, drop owner time and lifetime, regeneration, a Devil Square round, a scenario played on), and
   the bots (session, motor through a gate, career picks on the real data, brain scenarios, loot and wear, potions,
   a scroll learned and cast, points for a piece, an area skill, a map change, a monster out of reach, arrows bought
-  from Amy, four classes levelling, a bot's scenario), none breaking the client's rules. Run it after every change
+  from Amy, a town trip that sells, repairs, buys potions and stores a jewel, a weapon from Hanzo, a bow from Eo,
+  four classes levelling, a bot's scenario), none breaking the client's rules. Run it after every change
   too; a game error logged during a simulation fails it.
 - The real client is the final check: ask the user to try it and paste the log.
 

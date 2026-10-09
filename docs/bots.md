@@ -455,6 +455,97 @@ After B1, shops are there since M5.
 Done when: a bot that runs out of potions walks to town, sells its junk, buys potions, repairs and goes back to its
 hunting ground; an elf with the zen buys a bow with its skill from Eo and hunts with it.
 
+Where B1 left it (seed 1, 4 bots, 6 hours at exp rate 1): the bots carry 2 600..11 500 zen and nothing to spend it on,
+their weapons are at 3..8 of 18 durability (the values drop from half), they drink 6..19 potions in 6 hours (what
+they loot), the elf carries two short bows she never shoots. A wizard died 41 times, 25 of them at the east exit of
+Lorencia where a lich (level 14, reach 4) chased it to the town's edge and stayed: each walk out ran into it.
+
+Steps:
+
+1. Gear (`mup/bot/gear.py`): a sale worth for what it doesn't use, the client's sell price per tile of the grid
+   (under any use, from 50 zen), so it picks up junk worth selling and keeps old pieces to sell; potions while it has
+   fewer than a stock of 9 (3 stacks of 3), the rest threshold as before with 4. The item bytes of a list (`31`)
+   read back into items.
+2. Motor and checker: `33` one at a time until its answer, `34` (all, or one piece), `24` into the vault's window
+   until its answer and `82` to close it. Checker errors: a `33` or `34` without a shop open (a repair at a smith's),
+   a `24` into a vault that isn't open; refusals: a sale or repair that changed nothing.
+3. Town (`mup/bot/town.py`): errands from what it carries and the game's data (the shops' goods, the smiths, the vault
+   keepers, their spots): sell (any shop), repair (Hanzo, Zienna, Eo), potions (the shops that sell them: the
+   healing potion that gives the most life per zen of what it lacks when it drinks, but at least a fifth of its
+   life; mana potions for skills that take mana), arrows and bolts (B1's), an upgrade (step 4), the vault (jewels,
+   kept for B2). A trip is due for: no or one healing potion left with the zen for a stack, a worn piece at half its
+   durability with the zen to repair it, a grid nearly full of what it sells or stores, its ammunition (B1), an
+   upgrade worth a trip. On a trip it does every errand of the town it goes to: tops up its potions, repairs what is
+   worn a tenth, sells all its junk, buys the best upgrade it can afford, stores its jewels. Budget: repair, then
+   potions, then ammunition, then upgrades.
+4. Upgrades from the shops of its map: each piece it may wear now or within 3 levels weighed by `gear.value` (a bow
+   with its arrows) against what is left of its zen after the budget; a trip for one that adds 5%, any along with
+   another errand. Kept until its items, values or level change, or a minute.
+5. `Trip` (replaces B1's `Restock`): the stops in order, nearest first; at each it walks next to the NPC, talks (`30`),
+   sells, repairs, buys (one request at a time), stores and closes the vault (`82`), then the next. Done, it hunts
+   again (wears what it bought first). A trip that failed or left an errand undone waits 5 minutes. Tests: a knight
+   out of potions with junk, a worn sword and a jewel sells, repairs, buys potions, stores the jewel and kills the
+   spider again; a knight with zen buys a weapon from Hanzo and wears it.
+6. Elves as archers: the build agility first (1 : 6 : 2 : 1); the reach in the career's fights: the monsters that come
+   at it walk the reach less their own while it shoots (fewer hits), the walk to the next monster is shorter. Test:
+   an elf with the zen buys a bow from Eo and arrows from Elf Lala, wears them and shoots.
+7. `bin/sim.py`: trips, sold, bought, repairs, zen spent in the report; runs on several seeds without errors or
+   refusals, the elf with a bow from Eo. `tests/client.py`: the bot made with `bin/account.py` gets zen (in the
+   database) and buys potions from Amy (its `30` and `32` in the packet log under its cid).
+8. If the session allows: the wizard's deaths at the east exit (travel around a monster that would kill it in view).
+
+Done:
+- Gear: what a bot doesn't use is worth its sell price per tile (`gear.sale`, under any use, from 50 zen), so it picks
+  up what sells and keeps a piece it takes off to sell it; potions up to a stock of 9, the rest threshold as before.
+  `gear.decoded` reads the item bytes of `31`. `best_change` ranks its candidates by the order `gain` makes (the exp
+  per second, then the raw values): an elf with two round shields, one with an option, took one off and put the
+  other on 6 400 times (with the hand empty both add the same exp per second and the first by slot won, the plain
+  one). `gear.power` counts the walk to the next monster (8 tiles, less what a bow's reach adds), the career's
+  fights the reach (a monster that comes at a bow walks the reach less its own first, shot all the way). A level 15
+  elf with a short bow and its option: 10.2 exp/s, 7.6 with a hand axe (before: 17.9 and 22.2). Elves 1 : 6 : 2 : 1.
+- Motor and checker as planned: `33` and `24` into the vault's window one at a time until the answer, `34` (the
+  server answers only what it did), `82`; errors for a sale or repair without the shop (a smith's) open, a move into
+  a vault that isn't; refusals for a sale or repair that changed nothing. The motor keeps what a buy, sale or repair
+  cost, for the report.
+- Town (`mup/bot/town.py`) as planned, with: upgrades only of the shops of its map and that it can wear now (an elf
+  bought a crossbow +1 it could wear in 3 levels and carried it); ammunition is due only when the zen left after
+  the repair and the potions pays for a stack (trips for arrows bought potions and ended undone); healing potions
+  are never sold, nor what the trip buys (an elf bought arrows for the bow she was about to buy and sold them right
+  back, 67 times). Potions: apples to about level 15 (the most life per zen of those that give a fifth of its life),
+  small healing potions after; mana potions along for the skills.
+- Trip (`mup/bot/activity.py`, replaces `Restock`) as planned. The walk to an NPC ignores the deadly cells around it:
+  Amy stands outside Lorencia's north wall, the cell of the passage gets bull fighters, deadly under level 10, and
+  every trip to her failed ("no way there"); it also counts them from where it stands (after Amy the walk to Hanzo
+  started inside one). Two escapes on the way make the trip wait like a failed one (a bull fighter near Amy: 940
+  trips picked and dropped in a row).
+- Found on the way: the hunt's 90 s without a kill counted from the last kill, so the walk back from town and the
+  rests used them up and fresh grounds were given up at once; it counts hunting time only now (`Brain.hunted`). A
+  knight that fled into a pocket closed in by deadly cells found no ground and stood idle 49% of 6 hours: `Idle`
+  walks to the safe zone through them. A bow without arrows left an elf unable to hit back while spiders hit her,
+  equip waited for no monster at her and her flight never moved (the hunt's attack order kept the motor busy): 2
+  hours of escapes in place. The bow comes off at once now (or a stack goes in the hand), a flight drops the attack
+  order. The wizard's deaths at the east exit (step 8) didn't come back: in that run (seed 1, the bots named Botdk,
+  Botdw, ...) it dies 4 times instead of 41, at level 17 instead of 9.
+- `tests/sim.py` (12 s): the arrows test buys potions along now; a knight out of potions with two pad gloves, a sword
+  at 5 of 22 and a jewel walks to the vault keeper, Hanzo and Amy, stores the jewel and closes the vault (`24` to
+  window 2, `82`), sells the gloves (`33`), repairs all (`34 FF 00`), buys apples with the rest (`32`), the zen adds
+  up, and kills the spider again; a knight with 3 000 zen goes to Hanzo for an upgrade and wears it; an elf of level 8
+  with 3 000 zen buys a short bow from Eo and 4 stacks of arrows from Elf Lala and shoots the spider; an elf whose
+  arrows ran out, hit by the dragon, takes her bow off and kills it. None breaks the client's rules.
+  `tests/client.py`: the bot gets 300 zen in the database, its first trip is to Amy: its `30` to her and `32` in the
+  packet log, the server's "Botty buys" apples.
+- `bin/sim.py`: the report has the trips, sales, buys, repairs and their zen. 6 hours at exp rate 1, seeds 1..6: at 4
+  hours the class averages from B1 to B1b: knights 13.0 -> 15.0, wizards 11.7 -> 13.2, elves 10.8 -> 13.0,
+  gladiators 15.2 -> 16.0; at 6 hours 18.0, 16.2, 16.5, 19.0. 12..52 trips per bot (1..4% of the time), selling
+  16..67 items for 1 200..6 200 zen, buying potions, arrows, weapons and armor (Hanzo, Harold, Elf Lala, Eo), 0..7
+  repairs; 5 000..33 000 zen left. Five elves of six shoot a looted short bow from minute 9..18, every one buys a bow
+  with its skill from Eo at 0:47..4:53 (a short bow, a crossbow +1, a bow) and hunts with it. No errors, nothing
+  refused, none stuck. 250..340 times real time with 4 bots (B1 470): more kills, looting and walking, the profile
+  is the monsters' AI and the paths as before.
+- Left: the real client watching a bot's town trip and an elf with Eo's bow. The vault stores jewels only, none
+  dropped on these seeds. 6 of the 79 deaths of the six runs are on the way to Amy (bull fighters). Bots carry most
+  of their zen: the shops of their map have little more for them (Lumen's wings at 1 000 000).
+
 ## B2 bots: party, whisper, trade
 
 - Party: accept invites from players near the bot's level, follow the leader, share exp.

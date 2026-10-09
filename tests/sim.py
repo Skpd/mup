@@ -20,18 +20,19 @@ import time
 from pathlib import Path
 
 from client import (MONSTERS, SPAWNS, DROPS, MIXES, ROOT, SPIDER_SPOT, DRAGON_SPOT, HOUND_SPOT, GOBLIN_SPOT, B_SPOT,
-                    CHARON, DS_DRAGON, AMY, check)  # noqa: E402 (client puts the repository on the path)
+                    CHARON, DS_DRAGON, AMY, HANZO, VAULT_KEEPER, check)  # noqa: E402 (client puts the repository on
+# the path)
 from mup.bot import CLASSES, career, motor
 from mup.bot.activity import Hunt, Rest
 from mup.model.item import ARROWS, GRID, GROUP_SIZE, LEFT_HAND, RIGHT_HAND
 from mup.model.monster import Monster
 from mup.model.player import CharacterClass
 from mup.packet.client import (CAttack, CAreaHits, CBuy, CDevilSquareEnter, CMagicAOE, CMagicAttack, CMove, CPickUp,
-                               CTalk)
+                               CRepair, CSell, CTalk, CWarehouseClose)
 from mup.packet.server import (SClear, SDamage, SDevilSquareRanking, SDevilSquareResult, SDurability, SGroundItems,
                                SGroundZen, SItemDeleted, SItemsGone, SKill, SLife, SLookChange, SMapMove, SMeetMonster,
                                SMeetPlayer, SMove, SPickUpResult, SRespawn, SSkillChange)
-from mup.server import combat, command, devil_square, ground, inventory, monster
+from mup.server import combat, command, devil_square, ground, inventory, item as items, monster, shop, stats
 from mup.server.game import TICK
 from mup.server.world import distance
 from mup.sim import Sim, Hunter, of
@@ -87,6 +88,30 @@ end
 003 00 30 {} {} -1
 end
 """.format(*AMY[1], *SPIDER_SPOT)
+# Lorencia's town (Amy, Hanzo, the vault keeper) and the spider
+TOWN_SPIDER = """
+0
+253 00 00 {} {} 03
+251 00 00 {} {} 03
+240 00 00 {} {} 03
+end
+2
+003 00 30 {} {} -1
+end
+""".format(*AMY[1], *HANZO[1], *VAULT_KEEPER[1], *SPIDER_SPOT)
+# Noria's Eo the Craftsman (bows) and Elf Lala (arrows) at their spots of the real data, a spider east of the town
+EO, LALA = (243, (195, 124)), (242, (173, 125))
+NORIA_TOWN = """
+0
+243 03 00 {} {} 03
+242 03 00 {} {} 03
+end
+2
+003 03 30 215 130 -1
+end
+""".format(*EO[1], *LALA[1])
+NORIA_NPCS = ('242 1 "Elf Lala" 2 50 0 15 30 70 20 10 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0',
+              '243 1 "Eo the Craftsman" 2 50 0 15 30 70 20 10 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0')
 # the spider leaves a fire ball scroll (15/3) and nothing else
 SCROLL_DROP = """
 3 15 3 0 0 100
@@ -633,6 +658,24 @@ def bot_map(tmp):
         fair(c)
 
 
+def bot_out_of_arrows(tmp):
+    print('an elf whose arrows ran out, hit by the dragon, takes her bow off and kills it')
+    with Sim(**world(tmp, DRAGON_ONLY, 'dragon_only', drops='')) as sim:
+        game = sim.game
+        dragon = next(m for m in game.monsters.values() if m.type_id == 2)
+        c = sim.bot('Elfie', CharacterClass.ELF, at=(0, *free_tile(sim, 0, (dragon.x, dragon.y), 1, 1)))
+        p = c.player
+        p.inventory[LEFT_HAND] = game.new_item(game.item_info[4 * GROUP_SIZE], durability=20)  # no arrows
+        stats.update(c)
+        inventory.send(c)
+        c.brain.next_think_at = sim.now + 2  # it lets the dragon come
+        sim.run_until(lambda: c.brain.attacker(sim.now) is not None, limit=5, what='the dragon hits')
+        sim.run_until(lambda: c.counts['kills'], limit=30, what='the dragon killed')
+        check(LEFT_HAND not in p.inventory and any(i.type == 4 * GROUP_SIZE for i in p.inventory.values()),
+              'the bow goes into its grid (24) with the dragon at it, then it kills the dragon')
+        fair(c)
+
+
 def bot_out_of_reach(tmp):
     print('a bot shot by a monster it can\'t get at (on the tiles of a gate) runs out of its range')
     with Sim(**world(tmp, ARCHER_ONLY, 'archer_only', drops='', monsters=[ARCHER])) as sim:
@@ -674,16 +717,128 @@ def bot_buys_arrows(tmp):
                       and p.inventory.get(LEFT_HAND) is not None, limit=120, what='arrows and bow worn')
         amy = next(m for m in game.monsters.values() if m.type_id == AMY[0])
         talk = next(x for x in sent if isinstance(x, CTalk))
-        buys = [x for x in sent if isinstance(x, CBuy)]
-        check(talk.cid == amy.cid and any(e['event'] == 'pick' and e['activity'] == 'restock' for e in events),
+        buys = [(e['item'], e['price']) for e in events if e['event'] == 'buy']
+        check(talk.cid == amy.cid and any(e['event'] == 'pick' and e['activity'] == 'trip' for e in events),
               'it walks to Amy and talks to her (30)')
-        check(len(buys) == 4 and p.zen == 1000 - 4 * 70,
-              'it buys 4 stacks of arrows +0 (32), 70 zen each: {} zen left'.format(p.zen))
+        arrows = [b for b in buys if b[0] == 'Arrows']
+        potions = [b for b in buys if b[0] != 'Arrows']
+        check(arrows == [('Arrows', 70)] * 4 and len(buys) == sum(isinstance(x, CBuy) for x in sent)
+              and p.zen == 1000 - sum(price for _, price in buys),
+              'it buys 4 stacks of arrows +0 (32), 70 zen each, and potions along: {}, {} zen left'.format(
+                  potions, p.zen))
         check(p.inventory[LEFT_HAND].type == 4 * GROUP_SIZE,
               'it wears the bow in the left hand, the arrows in the right')
         sim.run_until(lambda: any(isinstance(x, SDurability) and x.slot == RIGHT_HAND for x in seen), limit=120,
                       what='a shot')
         check(True, 'it shoots the spider, an arrow a shot (2A for the right hand)')
+        fair(c)
+
+
+def spying(c):
+    """The client packets bot c sends from now on, as a list that fills while the game runs."""
+    sent = []
+    send = c.send
+
+    def spy(packet):
+        sent.append(packet)
+        send(packet)
+    c.send = spy
+    return sent
+
+
+def bot_town_trip(tmp):
+    print('a knight out of potions sells its junk, repairs, buys potions, stores its jewel and hunts again')
+    with Sim(**world(tmp, TOWN_SPIDER, 'town_spider', drops='')) as sim:
+        events = traced(sim)
+        game = sim.game
+        c = sim.bot('Botty', at=(0, *free_tile(sim, 0, SPIDER_SPOT, 3, 4)))
+        p = c.player
+        sword = p.inventory[RIGHT_HAND] = game.new_item(game.item_info[1], durability=5)  # a short sword, worn
+        stats.update(c)
+        for _ in range(2):
+            command.item(game, c, 10, 2)  # pad gloves, a knight can't wear them: junk that sells
+        command.item(game, c, 14, 13)  # a jewel of bless
+        p.zen = 100
+        inventory.send(c)
+        sent = spying(c)
+        sim.run_until(lambda: any(e['event'] == 'done' and e['activity'] == 'trip' for e in events), limit=120,
+                      what='a trip')
+        talks = [game.monsters[x.cid].type_id for x in sent if isinstance(x, CTalk)]
+        sales = [x for x in sent if isinstance(x, CSell)]
+        repairs = [x for x in sent if isinstance(x, CRepair)]
+        bought = [(e['item'], e['price']) for e in events if e['event'] == 'buy']
+        check(sorted(talks) == sorted([AMY[0], HANZO[0], VAULT_KEEPER[0]]),
+              'it walks to the vault keeper, Hanzo and Amy and talks to each (30): {}'.format(talks))
+        check(len(sales) == 2 and c.counts['sold zen'] == 2 * shop.value(game.new_item(game.item_info[10 * 32 + 2]),
+                                                                          shop.SELL),
+              'it sells both pad gloves (33): {} zen'.format(c.counts['sold zen']))
+        check([(x.slot, x.own) for x in repairs] == [(CRepair.ALL, 0)] and sword.durability ==
+              items.max_durability(sword), 'Hanzo repairs all (34 FF 00): the sword is at {}'.format(sword.durability))
+        potions = sum(i.durability for slot, i in p.inventory.items() if slot >= GRID and i.type in items.HEALING)
+        check(potions >= 3 and all(price <= 2200 for _, price in bought),
+              '{} healing potions bought (32) with the rest: {}'.format(potions, bought))
+        stored = [i.info.name for i in c.warehouse.items.values()] if c.warehouse is not None else []
+        check(stored == ['Jewel of Bless'] and any(isinstance(x, CWarehouseClose) for x in sent),
+              'the jewel goes into the vault (24 to window 2), then it closes the vault (82)')
+        check(p.zen + c.counts['spent'] + c.counts['repair zen'] == 100 + c.counts['sold zen'],
+              'the zen adds up: {} left, {} spent, {} for the repair'.format(p.zen, c.counts['spent'],
+                                                                         c.counts['repair zen']))
+        kills = c.counts['kills']
+        sim.run_until(lambda: c.counts['kills'] > kills, limit=120, what='a kill after the trip')
+        check(True, 'it goes back and kills the spider')
+        fair(c)
+
+
+def bot_buys_upgrade(tmp):
+    print('a knight with zen buys a weapon from Hanzo and wears it')
+    with Sim(**world(tmp, TOWN_SPIDER, 'town_spider', drops='')) as sim:
+        events = traced(sim)
+        game = sim.game
+        c = sim.bot('Botty', at=(0, 140, 125), level=5)
+        p = c.player
+        for _ in range(3):
+            potion = game.new_item(game.item_info[14 * GROUP_SIZE + 1], durability=3)
+            p.inventory[inventory.free_slot(p.inventory, potion.info)] = potion
+        p.zen = 3000
+        inventory.send(c)
+        sim.run_until(lambda: p.inventory.get(RIGHT_HAND) is not None, limit=120, what='a weapon worn')
+        bought = [(e['item'], e['price']) for e in events if e['event'] == 'buy']
+        trip = next(e for e in events if e['event'] == 'pick' and e['activity'] == 'trip')
+        check(trip['due'] == ['upgrade'] and len(bought) == 1 and bought[0][0] == p.inventory[RIGHT_HAND].info.name
+              and p.zen == 3000 - bought[0][1], 'it goes to Hanzo for an upgrade, buys {} and wears it'.format(
+                  bought))
+        fair(c)
+
+
+def elf_buys_bow(tmp):
+    print('an elf with zen buys a bow from Eo and arrows from Elf Lala, wears them and shoots')
+    with Sim(**world(tmp, NORIA_TOWN, 'noria_town', drops='', monsters=NORIA_NPCS)) as sim:
+        events = traced(sim)
+        game = sim.game
+        c = sim.bot('Elfie', CharacterClass.ELF, level=8)
+        p = c.player
+        for _ in range(3):
+            potion = game.new_item(game.item_info[14 * GROUP_SIZE + 1], durability=3)
+            p.inventory[inventory.free_slot(p.inventory, potion.info)] = potion
+        p.zen = 3000
+        inventory.send(c)
+        sent = spying(c)
+        seen = watch(c)
+
+        def shooting():
+            slot = combat.ammunition(p)  # the arrows' slot, 0 is the right hand
+            return slot is not None and slot is not False
+        sim.run_until(shooting, limit=300, what='a bow and its arrows worn')
+        talks = {game.monsters[x.cid].type_id for x in sent if isinstance(x, CTalk)}
+        bought = [(e['item'], e['price']) for e in events if e['event'] == 'buy']
+        bow = p.inventory[LEFT_HAND] if p.inventory[LEFT_HAND].type in stats.LEFT_BOWS else p.inventory[RIGHT_HAND]
+        check(talks == {EO[0], LALA[0]} and (bow.info.name, shop.value(bow)) in bought and bow.skill,
+              'it buys {} from Eo (with its skill) and {} from Elf Lala'.format(
+                  bow.info.name, [b for b in bought if b[0] in ('Arrows', 'Bolt')]))
+        ammo = RIGHT_HAND if bow.type in stats.LEFT_BOWS else LEFT_HAND
+        sim.run_until(lambda: any(isinstance(x, SDurability) and x.slot == ammo for x in seen), limit=120,
+                      what='a shot')
+        check(True, 'it shoots the spider with it')
         fair(c)
 
 
@@ -751,7 +906,11 @@ def main():
             bot_area(tmp)
             bot_map(tmp)
             bot_out_of_reach(tmp)
+            bot_out_of_arrows(tmp)
             bot_buys_arrows(tmp)
+            bot_town_trip(tmp)
+            bot_buys_upgrade(tmp)
+            elf_buys_bow(tmp)
             bots_level()
             bot_scenario(tmp)
         except AssertionError as e:

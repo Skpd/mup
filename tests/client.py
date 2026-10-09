@@ -2058,8 +2058,9 @@ BOT_HUNTS = (195, 100)  # a new knight hunts the test dragons around here
 
 
 def bots(t):
-    """A bot made with bin/account.py plays after the game server's last start with bots enabled: a client sees it
-    come, walk, swing and kill, its packets are in the packet log under its cid."""
+    """A bot made with bin/account.py plays after the game server's last start with bots enabled: it buys potions
+    with the zen it has, a client sees it come, walk, swing and kill, its packets are in the packet log under its
+    cid."""
     b, servers = t.b, t.servers
     gs = servers['bin/gs.py']
     print('a bot hunts')
@@ -2071,6 +2072,8 @@ def bots(t):
           (made.stdout + made.stderr).strip())
     with open(gs.config, 'a') as f:
         f.write('[bots]\nbots_enabled = yes\n')
+    with sqlite3.connect(t.db_path) as db:
+        db.execute('UPDATE characters SET zen = 300 WHERE name = ?', ('Botty',))  # out of potions, zen for some
     gs.start()
     b = login_ok('bob', 'pw2')
     enter(b, 'Bobby')
@@ -2078,7 +2081,7 @@ def bots(t):
 
     def players(p):
         return [(e[0] << 8 | e[1]) & 0x7FFF for e in entries(p) if text(e[18:28]) == 'Botty']
-    p = b.recv_until(lambda p: p.head == 0x12 and players(p), timeout=30, what='the bot in view')
+    p = b.recv_until(lambda p: p.head == 0x12 and players(p), timeout=60, what='the bot in view')
     bot = players(p)[0]
     check(True, 'B sees Botty (12, name at [+18..27]), cid {}'.format(bot))
     p = b.recv_until(lambda p: p.head == 0x10 and (p[3] << 8 | p[4]) & 0x7FFF == bot, timeout=10, what='its walk')
@@ -2099,6 +2102,9 @@ def bots(t):
     check('Bot Botty enters the game' in log and ' {} < c1 07 15 '.format(bot) in log
           and ' {} < c3 05 22 '.format(bot) in log and ' {} < c3 0b 24 '.format(bot) in log,
           'the game server log has it entering, its 15, 22 and 24 under its cid')
+    talk = ' {} < c3 05 30 {:02x} {:02x}'.format(bot, *divmod(t.amy, 256))
+    check(talk in log and ' {} < c3 04 32 '.format(bot) in log and 'Botty buys <Item Apple' in log,
+          'out of potions with 300 zen, it went to Amy first: its 30 to her and 32 for apples in the log')
 
 
 def play(servers, db_path):

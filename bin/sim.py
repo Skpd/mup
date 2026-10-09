@@ -69,6 +69,9 @@ def report(sim, bots, wall, started_at, levels_at_start, final=False):
                                           activities(n)))
         print('  {:<10} items {} zen {} potions {} learned {} worn {} owned {}: {}'.format(
             '', n['items'], n['zen'], n['potions'], n['learned'], n['worn'], n['owned'], worn(p)))
+        print('  {:<10} trips {} sold {} for {} zen, bought {} for {}, repairs {} for {}, stored {}; {} zen'.format(
+            '', n['trips'], n['sold'], n['sold zen'], n['bought'], n['spent'], n['repairs'], n['repair zen'],
+            n['stored'], p.zen))
         if c.brain is not None and len(c.brain.visited) > 1:
             visits = sorted(c.brain.visited.items(), key=lambda v: v[1])
             print('  {:<10} maps: {}'.format('', ', '.join('{} {}'.format(sim.game.maps[m].name, clock(t))
