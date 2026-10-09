@@ -3,7 +3,8 @@ The game on a fast clock (mup.sim) with bots (mup.bot): how far they get in game
 on, whether they get stuck or break the client's rules, how fast the game runs. A bot's situation can be dumped to a
 scenario file and played on from it, a run is replayed by its seed.
 
-usage: ./venv/bin/python bin/sim.py [--bots dk,dw,elf,mg] [--hours H] [--seed S] [--exp-rate R] [--trace FILE]
+usage: ./venv/bin/python bin/sim.py [--bots dk,dw,elf,mg] [--hours H] [--seed S] [--exp-rate R] [--drop-rate R]
+                                    [--trace FILE]
                                     [--packets BOT] [--digest] [--profile]
        ./venv/bin/python bin/sim.py --until T --dump BOT FILE   (T: game seconds or h:mm[:ss])
        ./venv/bin/python bin/sim.py --load FILE [--hours H]
@@ -61,15 +62,17 @@ def report(sim, bots, wall, started_at, levels_at_start, final=False):
             print('  {:<10} logged out'.format(c.bot.name))
             continue
         gained = p.level - levels_at_start[c.bot.name]
-        print('  {:<10} {:<3} level {:>3} ({:+.1f}/h) {:<8} kills {:>5} deaths {:>3} stuck {:>2} errors {:>2} refused {:>3}'
-              '  {}'.format(c.bot.name, class_name(p.class_type), p.level, gained / (played / 3600) if played else 0,
-                            sim.game.maps[p.map_id].name[:8], n['kills'], n['deaths'], n['stuck'], n['errors'],
-                            n['refused'], activities(n)))
+        print('  {:<10} {:<3} level {:>3} ({:+.1f}/h) {:<8} kills {:>5} deaths {:>3} stuck {:>2} errors {:>2} '
+              'refused {:>3}  {}'.format(c.bot.name, class_name(p.class_type), p.level,
+                                          gained / (played / 3600) if played else 0, sim.game.maps[p.map_id].name[:8],
+                                          n['kills'], n['deaths'], n['stuck'], n['errors'], n['refused'],
+                                          activities(n)))
         print('  {:<10} items {} zen {} potions {} learned {} worn {} owned {}: {}'.format(
             '', n['items'], n['zen'], n['potions'], n['learned'], n['worn'], n['owned'], worn(p)))
         if c.brain is not None and len(c.brain.visited) > 1:
+            visits = sorted(c.brain.visited.items(), key=lambda v: v[1])
             print('  {:<10} maps: {}'.format('', ', '.join('{} {}'.format(sim.game.maps[m].name, clock(t))
-                                                         for m, t in sorted(c.brain.visited.items(), key=lambda v: v[1]))))
+                                                         for m, t in visits)))
         if final:
             for message in c.checker.errors[:5]:
                 print('      error:', message)
@@ -152,6 +155,7 @@ def main(argv):
     parser.add_argument('--until', type=game_time, help='run until this game time instead')
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--exp-rate', type=float)
+    parser.add_argument('--drop-rate', type=float)
     parser.add_argument('--trace', metavar='FILE', help='the bots\' events as JSON lines')
     parser.add_argument('--packets', metavar='BOT', help='the packets of one bot in the log, like log_packets')
     parser.add_argument('--dump', nargs=2, metavar=('BOT', 'FILE'), help='at the end, the bot to a scenario file')
@@ -170,6 +174,8 @@ def main(argv):
     overrides = {k: getattr(cfg, k) for k in WORLD}
     if args.exp_rate is not None:
         overrides['exp_rate'] = args.exp_rate
+    if args.drop_rate is not None:
+        overrides['drop_rate'] = args.drop_rate
     if args.grounds:
         logging.getLogger().setLevel(logging.ERROR)
         grounds(overrides, args.grounds)

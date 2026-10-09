@@ -37,8 +37,8 @@ POOL = 0.5  # share of its mana a fight starts with
 BUILDS = {
     CharacterClass.DARK_KNIGHT: (5, 2, 3, 0),
     CharacterClass.DARK_WIZARD: (1, 2, 2, 5),
-    CharacterClass.ELF: (3, 4, 2, 1),
-    CharacterClass.MAGIC_GLADIATOR: (4, 2, 2, 2),
+    CharacterClass.ELF: (2, 5, 1, 2),
+    CharacterClass.MAGIC_GLADIATOR: (2, 3, 1, 4),
 }
 
 

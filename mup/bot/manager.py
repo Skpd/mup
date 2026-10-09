@@ -22,6 +22,7 @@ class BotManager:
         self.tap = None  # LocalSession.tap of the sessions, a simulation's digest
         self.trace = None  # callable(dict) for the events of the bots
         self._grounds = None
+        self._sellers = None
         game.bots = self
 
     @property
@@ -30,6 +31,19 @@ class BotManager:
         if self._grounds is None:
             self._grounds = career.load_grounds(self.game)
         return self._grounds
+
+    @property
+    def sellers(self):
+        """Item type -> [(NPC type, map, x, y)] of the shops that sell it: the shops' goods and the NPCs' spots of the
+        game's data, laid out when first needed."""
+        if self._sellers is None:
+            found = {}
+            for npc in sorted(self.game.monsters.values(), key=lambda m: m.cid):
+                goods = self.game.shops.get(npc.type_id) if npc.npc else None
+                for t in sorted({i.type for i in goods.items.values()}) if goods is not None else ():
+                    found.setdefault(t, []).append((npc.type_id, npc.map_id, npc.spawn.xs.start, npc.spawn.ys.start))
+            self._sellers = found
+        return self._sellers
 
     def login_all(self):
         bots = self.store.all()

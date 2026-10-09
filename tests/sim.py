@@ -20,13 +20,14 @@ import time
 from pathlib import Path
 
 from client import (MONSTERS, SPAWNS, DROPS, MIXES, ROOT, SPIDER_SPOT, DRAGON_SPOT, HOUND_SPOT, GOBLIN_SPOT, B_SPOT,
-                    CHARON, DS_DRAGON, check)  # noqa: E402 (client puts the repository on the path)
+                    CHARON, DS_DRAGON, AMY, check)  # noqa: E402 (client puts the repository on the path)
 from mup.bot import CLASSES, career, motor
 from mup.bot.activity import Hunt, Rest
-from mup.model.item import GRID, GROUP_SIZE, RIGHT_HAND
+from mup.model.item import ARROWS, GRID, GROUP_SIZE, LEFT_HAND, RIGHT_HAND
 from mup.model.monster import Monster
 from mup.model.player import CharacterClass
-from mup.packet.client import CAttack, CAreaHits, CDevilSquareEnter, CMagicAOE, CMagicAttack, CMove, CPickUp, CTalk
+from mup.packet.client import (CAttack, CAreaHits, CBuy, CDevilSquareEnter, CMagicAOE, CMagicAttack, CMove, CPickUp,
+                               CTalk)
 from mup.packet.server import (SClear, SDamage, SDevilSquareRanking, SDevilSquareResult, SDurability, SGroundItems,
                                SGroundZen, SItemDeleted, SItemsGone, SKill, SLife, SLookChange, SMapMove, SMeetMonster,
                                SMeetPlayer, SMove, SPickUpResult, SRespawn, SSkillChange)
@@ -68,17 +69,36 @@ GOBLINS_ONLY = """
 026 00 30 {0} {1} -1
 end
 """.format(*GOBLIN_SPOT)
+# an archer (attack range 4, 1 damage) on the tiles of Lorencia's gate to Noria: gate and wall all around it, bots
+# don't step on a gate they don't take
+ARCHER = '29 1 "Hunter" 13 220 0 1 1 0 0 1000 0 0 0 4 4 400 1600 10 2 0 0 0 0 0 0 0 0'
+ARCHER_SPOT = (215, 247)
+ARCHER_ONLY = """
+2
+029 00 30 215 244 -1
+end
+"""
+# Amy (she sells arrows) and the spider
+AMY_SPIDER = """
+0
+253 00 00 {} {} 03
+end
+2
+003 00 30 {} {} -1
+end
+""".format(*AMY[1], *SPIDER_SPOT)
 # the spider leaves a fire ball scroll (15/3) and nothing else
 SCROLL_DROP = """
 3 15 3 0 0 100
 """
 
 
-def world(tmp, spawns=SPAWNS, name='monster_spawns', drops=DROPS):
+def world(tmp, spawns=SPAWNS, name='monster_spawns', drops=DROPS, monsters=()):
     """Config of tests/client.py's test world, its files written to tmp. spawns: another MonsterSetBase text, name:
-    its file's; drops: another item_drops text."""
+    its file's; drops: another item_drops text; monsters: Monster.txt lines of more monster types."""
     files = {}
-    for key, file, text in (('monster_info', 'monster_info', MONSTERS), ('monster_spawns', name, spawns),
+    info = MONSTERS.replace('\nend\n', ''.join('\n' + line for line in monsters) + '\nend\n')
+    for key, file, text in (('monster_info', name + '_monsters', info), ('monster_spawns', name, spawns),
                             ('item_drops', name + '_drops', drops), ('mixes', 'mixes', MIXES)):
         files[key] = os.path.join(tmp, file + '.txt')
         Path(files[key]).write_text(text)
@@ -477,6 +497,23 @@ def bot_loots(tmp):
         fair(c)
 
 
+def bot_makes_room(tmp):
+    print('with a grid full of junk the bot drops some for the spider\'s sword')
+    with Sim(**world(tmp, SPIDER_ONLY, 'spider_only')) as sim:
+        events = traced(sim)
+        game = sim.game
+        c = sim.bot('Botty', at=(0, *free_tile(sim, 0, SPIDER_SPOT, 3, 4)))
+        p = c.player
+        for _ in range(16):
+            command.item(game, c, 10, 2)  # pad gloves, a knight can't wear them: junk
+        check(inventory.free_slot(p.inventory, game.item_info[1]) is None, 'its grid is full of pad gloves')
+        sim.run_until(lambda: p.inventory.get(RIGHT_HAND) is not None, limit=60, what='the sword worn')
+        dropped = [e['item'] for e in events if e['event'] == 'drop']
+        check(dropped and set(dropped) == {'Pad Gloves'}, 'it drops {} pad gloves, picks up the sword and wears it'
+              .format(len(dropped)))
+        fair(c)
+
+
 def bot_potions(tmp):
     print('a bot hit by the dragon drinks its potions, 2A then 28')
     with Sim(**world(tmp, DRAGON_ONLY, 'dragon_only', drops='')) as sim:
@@ -596,6 +633,60 @@ def bot_map(tmp):
         fair(c)
 
 
+def bot_out_of_reach(tmp):
+    print('a bot shot by a monster it can\'t get at (on the tiles of a gate) runs out of its range')
+    with Sim(**world(tmp, ARCHER_ONLY, 'archer_only', drops='', monsters=[ARCHER])) as sim:
+        events = traced(sim)
+        game = sim.game
+        archer = next(m for m in game.monsters.values() if m.type_id == 29)
+        monster.place(game, archer, *ARCHER_SPOT, archer.max_life, ARCHER_SPOT, sim.now)
+        c = sim.bot('Botty', at=(0, ARCHER_SPOT[0], ARCHER_SPOT[1] - 4), level=5)
+        sim.run_until(lambda: c.brain.attacked_by.get(archer.cid), limit=10, what='shot')
+        sim.run(30)
+        p = c.player
+        check(archer.dead or distance(p.x, p.y, archer.x, archer.y) > archer.info.attack_range,
+              'it doesn\'t stand there: the archer {}'.format(
+                  'is dead' if archer.dead else '{} tiles away'.format(distance(p.x, p.y, archer.x, archer.y))))
+        tries = sum(e['event'] == 'unreachable' for e in events)
+        check(tries <= 3 and any(e['event'] == 'pick' and e['activity'] == 'escape' for e in events),
+              'it ran ({} paths to it tried)'.format(tries))
+        fair(c)
+
+
+def bot_buys_arrows(tmp):
+    print('an elf with a bow and zen buys arrows from Amy, wears both and shoots')
+    with Sim(**world(tmp, AMY_SPIDER, 'amy_spider')) as sim:
+        events = traced(sim)
+        game = sim.game
+        c = sim.bot('Elfie', CharacterClass.ELF, at=(0, 140, 125))
+        p = c.player
+        command.item(game, c, 4, 0)  # a short bow
+        p.zen = 1000
+        sent = []
+        send = c.send
+
+        def spy(packet):
+            sent.append(packet)
+            send(packet)
+        c.send = spy
+        seen = watch(c)
+        sim.run_until(lambda: p.inventory.get(RIGHT_HAND) is not None and p.inventory[RIGHT_HAND].type == ARROWS
+                      and p.inventory.get(LEFT_HAND) is not None, limit=120, what='arrows and bow worn')
+        amy = next(m for m in game.monsters.values() if m.type_id == AMY[0])
+        talk = next(x for x in sent if isinstance(x, CTalk))
+        buys = [x for x in sent if isinstance(x, CBuy)]
+        check(talk.cid == amy.cid and any(e['event'] == 'pick' and e['activity'] == 'restock' for e in events),
+              'it walks to Amy and talks to her (30)')
+        check(len(buys) == 4 and p.zen == 1000 - 4 * 70,
+              'it buys 4 stacks of arrows +0 (32), 70 zen each: {} zen left'.format(p.zen))
+        check(p.inventory[LEFT_HAND].type == 4 * GROUP_SIZE,
+              'it wears the bow in the left hand, the arrows in the right')
+        sim.run_until(lambda: any(isinstance(x, SDurability) and x.slot == RIGHT_HAND for x in seen), limit=120,
+                      what='a shot')
+        check(True, 'it shoots the spider, an arrow a shot (2A for the right hand)')
+        fair(c)
+
+
 def bots_level():
     print('four classes level on the real data')
     with Sim(seed=4, exp_rate=10) as sim:
@@ -653,11 +744,14 @@ def main():
             bot_points(cfg)
             wizard_mana(tmp)
             bot_loots(tmp)
+            bot_makes_room(tmp)
             bot_potions(tmp)
             bot_learns(tmp)
             bot_build(cfg)
             bot_area(tmp)
             bot_map(tmp)
+            bot_out_of_reach(tmp)
+            bot_buys_arrows(tmp)
             bots_level()
             bot_scenario(tmp)
         except AssertionError as e:

@@ -5,18 +5,24 @@ until the target dies or leaves the view, as after a click on a monster (an area
 1D report a moment later); a walk that ends on an entrance gate sends 1C when the level allows, the map loaded
 answers F3 12. Items: a pick up order walks next to the item and sends 22; moves (24), drops (23) and uses (26) go
 out at once. Like the client, one 22 and one 24 at a time until their answer, no 26 and no 24 while item use is
-locked (docs/protocol-097.md, Items).
+locked (docs/protocol-097.md, Items). Shops: a talk (30) from next to the NPC, buys (32) one at a time until the
+answer.
+
+A swing reaches as far as the client lets it (0x4650a0, code): 1.8 tiles from the middle of the hero's tile, 2.2 with
+a spear in the right hand, 6 with a bow in the left or a crossbow in the right.
 
 The client's pace, from its packets in the server logs (logs/, 2026-10-08, traffic): a knight holding the attack
 swings every 0.75..0.77 s at attack speed 32 (0E); walks re-sent while walking put a tile at 0.25..0.3 s, rough. Not in
 the logs: casts, potions, gates, area effects. Those are placeholders until a capture (docs/bots.md, B0 step 0).
 """
 import logging
+import math
+from mup.model.item import GROUP_SIZE, LEFT_HAND, RIGHT_HAND
 from mup.model.monster import Monster
 from mup.model.player import CharacterClass
-from mup.packet.client import (CAreaHits, CAttack, CDropItem, CMagicAOE, CMagicAttack, CMapReady, CMove, CMoveGate,
-                               CMoveItem, CPickUp, CUseItem)
-from mup.packet.server import (SDropResult, SDurability, SItemDeleted, SLife, SMapMove, SMoveItemResult,
+from mup.packet.client import (CAreaHits, CAttack, CBuy, CDropItem, CMagicAOE, CMagicAttack, CMapReady, CMove,
+                               CMoveGate, CMoveItem, CPickUp, CTalk, CUseItem)
+from mup.packet.server import (SBuyResult, SDropResult, SDurability, SItemDeleted, SLife, SMapMove, SMoveItemResult,
                                SPickUpResult)
 from mup.server import skill as skills
 from mup.server.path import direction, find_path
@@ -33,14 +39,18 @@ SEGMENT = 8  # steps per walk packet
 APPROACH_SEGMENT = 4  # towards a target that moves, shorter
 APPROACH_STEPS = 40  # a path to a target takes at most, around a wall
 APPROACH_BUDGET = 1000  # tiles looked at for it
-MELEE = 1  # tiles a swing is made from: next to the target, the server allows 3
+MELEE, SPEAR, BOW = 1.8, 2.2, 6.0  # tiles a swing reaches (client 0x4650a0), the server allows 3 and 8
+SPEARS = range(3 * GROUP_SIZE, 4 * GROUP_SIZE)  # in the right hand, the client's ranges
+BOWS = set(range(4 * GROUP_SIZE, 4 * GROUP_SIZE + 7)) | {4 * GROUP_SIZE + 17}  # in the left hand
+CROSSBOWS = set(range(4 * GROUP_SIZE + 8, 4 * GROUP_SIZE + 15)) | {4 * GROUP_SIZE + 16}  # in the right hand
+TALK_REACH = 1  # tiles: the client talks from next to the NPC, it walks there first
 SWING = 0x64  # the attack animation the client sends
 PICK_UP_REACH = 1  # tiles: the client sends 22 within 1.5 tiles of the item (150 units), it walks there first
 USE_PAUSE = 0.5  # seconds from the unlock of an item use to the next 26, a placeholder
 AREA_LAND = 0.4  # seconds from an area cast (1E) to its effect's 1D report, a placeholder
 AREA_REACH = 3  # tiles around the point an effect reports targets within: the client's reach 0.8..3 tiles
 AREA_TARGETS = 5  # per report, the client's limit
-PICK_UP, DROP, MOVE = 'pick up', 'drop', 'move'  # the item requests it waits for the answer of
+PICK_UP, DROP, MOVE, BUY = 'pick up', 'drop', 'move', 'buy'  # the item requests it waits for the answer of
 
 
 class Motor:
@@ -65,6 +75,7 @@ class Motor:
         self.locked = False  # item use: a 26 waits for its unlock
         self.use_at = 0.0  # the next 26 may go out then
         self.picked = None  # (GroundItem, picked up) of the last 22 answer, for the brain
+        self.bought = None  # bought or not, the last 32 answer, for the brain
         self.area = None  # (when, skill list index, x, y) of an area cast whose effect it reports
         self.serial = 0  # of the area effects it reported
 
@@ -137,6 +148,18 @@ class Motor:
         self.c.send(CUseItem(slot=slot, target=0))
         return True
 
+    def talk(self, npc):
+        """30: talks to an NPC next to it."""
+        self.c.send(CTalk(cid=npc.cid))
+
+    def buy(self, slot):
+        """32: buys the goods in slot of the shop it talks to. False when an item request waits for its answer."""
+        if self.waiting is not None:
+            return False
+        self.waiting = BUY
+        self.c.send(CBuy(slot=slot))
+        return True
+
     def cast(self, number, target_cid, now):
         """19: skill number on target_cid now (a buff, a heal, a summon on itself) when its pace allows and it
         doesn't walk. False otherwise."""
@@ -166,6 +189,10 @@ class Motor:
             elif isinstance(packet, SMoveItemResult):
                 if self.waiting == MOVE:
                     self.waiting = None
+            elif isinstance(packet, SBuyResult):
+                if self.waiting == BUY:
+                    self.waiting = None
+                    self.bought = packet.slot != SBuyResult.FAILED
             elif isinstance(packet, SLife) and packet.type == SLife.UNLOCK \
                     or isinstance(packet, (SItemDeleted, SDurability)) and packet.unlock:
                 if self.locked:
@@ -255,10 +282,27 @@ class Motor:
             return
         self._walk(path[:SEGMENT], now)
 
-    def reach(self):
-        """Tiles from the target it hits from: the skill's distance, next to it with the weapon."""
+    def weapon_range(self):
+        """Tiles a swing reaches as the client measures them: MELEE, SPEAR or BOW by what the hands hold."""
+        p = self.player
+        right, left = p.inventory.get(RIGHT_HAND), p.inventory.get(LEFT_HAND)
+        if left is not None and left.type in BOWS or right is not None and right.type in CROSSBOWS:
+            return BOW
+        return SPEAR if right is not None and right.type in SPEARS else MELEE
+
+    def walk_reach(self):
+        """Tiles (a diagonal step one) from a target it walks to before it swings: all of them within the weapon's
+        range."""
+        return max(1, int(self.weapon_range() / math.sqrt(2)))
+
+    def in_reach(self, mob):
+        """mob is in reach: the skill's distance, the weapon's range."""
+        p = self.player
         info = self.c.server.skills.get(self.skill) if self.skill is not None else None
-        return info.distance if info is not None else MELEE
+        if info is not None:
+            return distance(p.x, p.y, mob.x, mob.y) <= info.distance
+        r = self.weapon_range()
+        return (p.x - mob.x) ** 2 + (p.y - mob.y) ** 2 <= r * r
 
     def _attack(self, now):
         c, p, mob = self.c, self.player, self.target
@@ -269,11 +313,12 @@ class Motor:
             info = c.server.skills.get(self.skill)
             if info is None or p.mana < info.mana or self.skill not in p.skills:
                 self.skill = None  # the client doesn't cast without the mana, the weapon then
-        reach = self.reach()
-        if distance(p.x, p.y, mob.x, mob.y) <= reach:
+        if self.in_reach(mob):
             if now >= self.next_hit_at:
                 self._hit(mob, now)
             return
+        info = c.server.skills.get(self.skill) if self.skill is not None else None
+        reach = info.distance if info is not None else self.walk_reach()
         path = find_path(c.walkable, (p.x, p.y), (mob.x, mob.y), reach=reach, max_steps=APPROACH_STEPS,
                          budget=APPROACH_BUDGET)
         if not path:

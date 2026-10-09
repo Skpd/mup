@@ -6,10 +6,11 @@ the ground in its view (their 4 item bytes) and the game's data.
 A piece of equipment is worth what its character window would show with the piece worn against without
 (mup.server.stats, the client's formulas) put through the career's fights against the monsters it hunts
 (mup.bot.career): the share of exp per second it adds, the raw values (damage, defense, speeds) breaking ties. A
-piece at 0 durability gives nothing, a bow nothing without its arrows. One it can wear within a few levels counts
-part of its gain, the level up points go to it first (goal). Other items are worth what they do for it: potions
-while it carries few, the scrolls and orbs of skills it can learn, jewels (kept for trading in B2). The rest is
-junk, left on the ground and dropped when room is needed. The weights are mup's choices.
+piece at 0 durability gives nothing, a bow nothing without its arrows (weighed with a stack, they can be bought).
+One it can wear within a few levels counts part of its gain, the level up points go to it first (goal). Other items
+are worth what they do for it: potions while it carries few, the scrolls and orbs of skills it can learn, jewels
+(kept for trading in B2). The rest is junk, left on the ground and dropped when room is needed. The weights are
+mup's choices.
 """
 import dataclasses
 from dataclasses import dataclass
@@ -89,9 +90,12 @@ def trial(game, p, inv):
 def power(game, p, types, risk=0.5):
     """(exp per second, raw values) of p's player hunting the monster types: the mean over them of the exp of a
     kill per second of fighting and resting after it (mup.bot.career.fight), nothing for those it can't kill; the
-    raw values are the damage of its hits (the hands it hits with), wizardry, defense, defense rate and speeds."""
+    raw values are the damage of its hits (the hands it hits with), wizardry, defense, defense rate and speeds.
+    Nothing at all with a bow and no arrows: it can't attack."""
+    if combat.ammunition(p) is False:
+        return 0.0, 0.0
     rates = []
-    if types and combat.ammunition(p) is not False:
+    if types:
         fights = career.fights_for(game, p, types, risk)
         regen = career.regen_rate(p)
         for t in sorted(types):
@@ -108,10 +112,11 @@ def power(game, p, types, risk=0.5):
 
 def gain(before, after):
     """The share a change of power from before to after adds: of the exp per second, of the raw values (times
-    TIE) when that doesn't change. A consistent order, so changes can't go round in circles."""
+    TIE) when that doesn't change; from no exp per second at all (it can't fight) the exp per second it gets to. A
+    consistent order, so changes can't go round in circles."""
     (r0, w0), (r1, w1) = before, after
     if abs(r1 - r0) > SAME * max(r0, r1):
-        return (r1 - r0) / r0 if r0 > 0 else 1.0
+        return (r1 - r0) / r0 if r0 > 0 else r1
     return TIE * (w1 - w0) / max(w0, 1.0)
 
 
@@ -191,15 +196,26 @@ def change_for(p, item, slot, source=None):
 
 def best_change(game, p, types, risk=0.5, item=None, source=None):
     """The Change of the most gain: item (from grid slot source, None: from the ground) or, without an item, any
-    piece of the grid, or a bow without arrows taken off. None when nothing makes it better."""
+    piece of the grid. A bow whose arrows ran out gets a stack of the grid in the other hand (the client does that
+    on its own), without one it comes off. None when nothing makes it better."""
     now = power(game, p, types, risk)
+    best = None
     if item is None and combat.ammunition(p) is False:
         bow = LEFT_HAND if LEFT_HAND in p.inventory and p.inventory[LEFT_HAND].type in stats.LEFT_BOWS else RIGHT_HAND
-        after = {s: i for s, i in p.inventory.items() if s != bow}
-        return Change((bow,), (), after, gain(now, power(game, trial(game, p, after), types, risk)))
+        ammo, hand = ammunition_for(p.inventory[bow])
+        stack = next(((s, i) for s, i in sorted(p.inventory.items()) if s >= GRID and i.type == ammo), None)
+        if stack is not None and hand not in p.inventory:
+            after = {s: i for s, i in p.inventory.items() if s != stack[0]}
+            after[hand] = stack[1]
+            best = Change((), ((stack[0], hand, stack[1]),), after, gain(now, power(game, trial(game, p, after),
+                                                                                     types, risk)))
+        else:
+            after = {s: i for s, i in p.inventory.items() if s != bow}
+            best = Change((bow,), (), after, gain(now, power(game, trial(game, p, after), types, risk)))
+        if best.gain <= 0:
+            best = None
     candidates = [(source, item)] if item is not None else [
         (slot, i) for slot, i in sorted(p.inventory.items()) if slot >= GRID]
-    best = None
     for src, i in candidates:
         for slot in slots_for(i):
             c = change_for(p, i, slot, src)
@@ -241,6 +257,24 @@ def learnable(game, p, item, ahead=False):
     return ahead and raised(p, item) is not None
 
 
+VIRTUAL = 0xFF  # a grid slot that isn't one, for the stack of arrows a bow is weighed with
+
+
+def armed(game, p, item):
+    """p's player as it would be with a stack of the ammunition item shoots in its grid, when it has none: what a
+    bow or crossbow is worth to a bot that can buy them (mup.bot.activity.Restock)."""
+    ammo = ammunition_for(item)
+    if ammo is None or any(i.type == ammo[0] for i in p.inventory.values()):
+        return p
+    info = game.item_info[ammo[0]]
+    return dataclasses.replace(p, inventory={**p.inventory, VIRTUAL: Item(info, durability=info.durability)})
+
+
+def shots(p, ammo):
+    """Arrows or bolts (type ammo) p's player has, worn and in the grid."""
+    return sum(i.durability for i in p.inventory.values() if i.type == ammo)
+
+
 def value(game, p, item, types, risk=0.5, source=None):
     """
     What item is worth to p's player, 0 for junk: a piece it would wear the share it adds (at least UPGRADE), one it
@@ -258,9 +292,11 @@ def value(game, p, item, types, risk=0.5, source=None):
     if item.type in JEWELS:
         return JEWEL
     if item.type in AMMO:
-        return POTION if inventory.class_allowed(p, item.info) else 0.0
+        shooters = [ammunition_for(i) for i in p.inventory.values()]
+        return POTION if any(a is not None and a[0] == item.type for a in shooters) else 0.0
     if not slots_for(item) or not inventory.class_allowed(p, item.info):
         return 0.0
+    p = armed(game, p, item)
     c = best_change(game, p, types, risk, item, source)
     if c is not None:
         return max(c.gain, UPGRADE)

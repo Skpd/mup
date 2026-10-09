@@ -9,15 +9,16 @@ goes to the trace (BotManager.trace).
 import logging
 from collections import Counter
 from mup.bot import career, gear
-from mup.bot.activity import (Activity, Dead, Escape, Rest, SpendPoints, Equip, Loot, Travel, Hunt, Idle, FAILED,
-                              LEVEL)
-from mup.bot.motor import AREA_REACH, AREA_TARGETS
-from mup.model.item import GRID, GroundItem
+from mup.bot.activity import (Activity, Dead, Escape, Rest, SpendPoints, Equip, Loot, Restock, Spot, Travel, Hunt,
+                              Idle, FAILED, LEVEL)
+from mup.bot.motor import AREA_REACH, AREA_TARGETS, TALK_REACH
+from mup.model.item import GRID, GroundItem, Item
 from mup.model.monster import Monster
 from mup.model.player import CharacterClass
-from mup.packet.server import (SAction, SDurability, SInventory, SItemDeleted, SKill, SLevelUp, SMapMove,
-                               SMoveItemResult, SPickUpResult, SPointResult, SRespawn, SSkillChange)
-from mup.server import casting, effect, ground as grounds, inventory, summon
+from mup.packet.server import (SAction, SChaosClosed, SDurability, SInventory, SItemDeleted, SItemList, SKill,
+                               SLevelUp, SMapMove, SMoveItemResult, SPickUpResult, SPointResult, SRespawn,
+                               SSkillChange, STalk, SWarehouseClosed)
+from mup.server import casting, effect, ground as grounds, inventory, item as items, shop, summon
 from mup.server.world import distance
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ POTION_REST = 0.5  # with a full stock of healing potions it rests below this sh
 LOOT_RANGE = 12  # tiles from it an item on the ground may lie that it goes for
 LOOT_TRIES = 2  # pick ups of an item before it is left there: refused in its owner time, once more after it
 ZEN = 0.05  # worth of zen on the ground, it takes no room
+RESTOCK_BELOW = 60  # arrows or bolts left it buys more below (mup.bot.activity.Restock)
 DRAINED = 600.0  # seconds its kills on a ground count against it: the monsters respawn anywhere in their spawn area,
 # most of them away from the ground
 
@@ -83,6 +85,9 @@ class Brain:
         self.dirty = True  # its items or values changed: _change and _goal are made again
         self.resume = False  # it looted or put on an item while hunting: it hunts on where it stands
         self.interrupted = None  # the activity the last switch dropped
+        self.window = None  # the NPC window it was shown (30), STalk's kinds, until it closes
+        self.goods = {}  # shop slot -> the 4 item bytes of the goods of the shop it talks to (31)
+        self.restock_after = 0.0  # the next trip for arrows or bolts not before
 
     @property
     def player(self):
@@ -143,12 +148,21 @@ class Brain:
                     self.changed()
                 elif isinstance(packet, SItemDeleted):
                     self.dirty = True
+            elif isinstance(packet, STalk):
+                self.window, self.goods = packet.window, {}
+            elif isinstance(packet, SItemList):
+                if self.window == STalk.SHOP and packet.kind == SItemList.SHOP:
+                    self.goods = {e['slot']: e['item'] for e in packet.entries}
+            elif isinstance(packet, (SWarehouseClosed, SChaosClosed)):
+                self.window, self.goods = None, {}
             elif isinstance(packet, SRespawn):
+                self.window, self.goods = None, {}
                 c.motor.stop()
                 c.motor.walk_ends_at = now
                 self.entered(packet.map)
                 self.event('respawn', map=packet.map, x=packet.x, y=packet.y)
             elif isinstance(packet, SMapMove) and packet.map_change:
+                self.window, self.goods = None, {}
                 self.repick = True
                 if packet.map != self.map_id:
                     self.came_from, self.came_at = self.map_id, now
@@ -160,6 +174,11 @@ class Brain:
         if picked is not None:
             c.motor.picked = None
             self.picked(*picked, now)
+        if c.motor.bought is not None:
+            if c.motor.bought:
+                c.counts['bought'] += 1
+            self.event('bought' if c.motor.bought else 'not bought')
+            c.motor.bought = None
 
     def changed(self):
         """Its values, skills or items changed: the fights and the worth of items are weighed again."""
@@ -209,8 +228,9 @@ class Brain:
         return found
 
     def dangers(self, now):
-        """Monsters in view it runs from: one hitting it whose fight takes more life than its risk allows, one that
-        would kill it about to notice it. None in the safe zone, monsters don't go for players there."""
+        """Monsters in view it runs from: one hitting it whose fight takes more life than its risk allows or that it
+        can't get at (a ranged one on a gate), one that would kill it about to notice it. None in the safe zone,
+        monsters don't go for players there."""
         p = self.player
         found = []
         if self.c.server.maps[p.map_id].terrain.safe(p.x, p.y):
@@ -218,10 +238,17 @@ class Brain:
         for o in self.c.view:
             if isinstance(o, Monster) and o.attackable and not o.dead:
                 f = self.fight(o.type_id)
-                if self.attacked_by.get(o.cid, -ATTACKED) > now - ATTACKED and not f.ok or (
+                if self.attacked_by.get(o.cid, -ATTACKED) > now - ATTACKED and (
+                        not f.ok or self.left_alone.get(o.cid, 0.0) > now or not self.reachable(o)) or (
                         f.deadly and distance(o.x, o.y, p.x, p.y) <= o.info.view_range + 1):
                     found.append(o)
         return found
+
+    def reachable(self, o):
+        """A tile it walks on is within its weapon's reach of monster o, it can get at it."""
+        walkable = self.c.walkable
+        r = self.c.motor.walk_reach()
+        return any(walkable(o.x + dx, o.y + dy) for dx in range(-r, r + 1) for dy in range(-r, r + 1))
 
     def unsafe(self, x, y):
         """A monster in view that would kill it is about to notice who stands at x, y."""
@@ -239,16 +266,15 @@ class Brain:
         return min(found, key=lambda o: (distance(o.x, o.y, p.x, p.y), o.cid), default=None)
 
     def choose_target(self, now, band, attacker=None, fit=True):
-        """An attacker it can fight first, then the nearest monster in view of the band that isn't left alone and
-        whose fight leaves it above its rest threshold (fit: False, whatever its life) and that doesn't stand where a
-        monster would kill it or out of reach from the tiles it walks on."""
-        if attacker is not None and self.fight(attacker.type_id).ok:
+        """An attacker it can fight and get at first, then the nearest monster in view of the band; neither left
+        alone, nor where it can't get at them. Of the band those whose fight leaves it above its rest threshold (fit:
+        False, whatever its life) and that don't stand where a monster would kill it."""
+        if attacker is not None and self.fight(attacker.type_id).ok and self.left_alone.get(attacker.cid, 0.0) <= now \
+                and self.reachable(attacker):
             return attacker
         p = self.player
-        walkable = self.c.walkable
         found = [o for o in self.c.view if isinstance(o, Monster) and not o.dead and o.attackable
-                 and o.type_id in band and self.left_alone.get(o.cid, 0.0) <= now
-                 and any(walkable(o.x + dx, o.y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1))
+                 and o.type_id in band and self.left_alone.get(o.cid, 0.0) <= now and self.reachable(o)
                  and (not fit or self.fit_for(o.type_id)) and not self.unsafe(o.x, o.y)]
         return min(found, key=lambda o: (distance(o.x, o.y, p.x, p.y), o.cid), default=None)
 
@@ -407,6 +433,74 @@ class Brain:
         self.looted[g] = tries + 1, now + grounds.OWNER_TIME  # another's for a while, the server's rule
         self.event('not picked', ground_item=g.id, tries=tries + 1)
 
+    def ammunition_needed(self, now):
+        """The type of the arrows or bolts it goes to buy: it has a bow or crossbow it may wear and would shoot
+        with, fewer than RESTOCK_BELOW of them and the zen for a stack, a shop that sells them is on its map or one
+        the gates lead to. None."""
+        if now < self.restock_after:
+            return None
+        p = self.player
+        for slot, item in sorted(p.inventory.items()):
+            ammo = gear.ammunition_for(item)
+            if ammo is None or gear.shots(p, ammo[0]) >= RESTOCK_BELOW or not inventory.class_allowed(p, item.info):
+                continue
+            r = items.requirements(item)
+            if p.level < r.level or p.strength < r.strength or p.agility < r.agility or p.energy < r.energy:
+                continue
+            if slot >= GRID and self.value(item, slot) <= 0:
+                continue
+            info = self.c.server.item_info[ammo[0]]
+            if p.zen < shop.value(Item(info, durability=info.durability)) or self.seller(ammo[0]) is None:
+                continue
+            return ammo[0]
+        return None
+
+    def seller(self, ammo):
+        """(NPC type, Spot next to it) of the shop that sells ammo nearest: of its map, else of the maps the gates
+        lead to by the steps through them. The NPCs' spots and goods are the game's data. None."""
+        c, p = self.c, self.player
+        manager = c.manager
+        found = manager.sellers.get(ammo, ())
+        here = [(distance(x, y, p.x, p.y), npc_type, m, x, y) for npc_type, m, x, y in found if m == p.map_id]
+        if here:
+            _, npc_type, m, x, y = min(here)
+        else:
+            routes = manager.flows.routes(p.map_id, p.x, p.y, p.level,
+                                          p.class_type.base == CharacterClass.MAGIC_GLADIATOR, self.blocked)
+            steps = {}
+            for r in routes.values():
+                m = c.server.gates[r.arrival].map_id
+                steps[m] = min(steps.get(m, r.steps), r.steps)
+            there = [(steps[m], npc_type, m, x, y) for npc_type, m, x, y in found if m in steps]
+            if not there:
+                return None
+            _, npc_type, m, x, y = min(there)
+        walkable = manager.flows.walkable(m)
+        tiles = [(x + dx, y + dy) for dy in range(-TALK_REACH, TALK_REACH + 1)
+                 for dx in range(-TALK_REACH, TALK_REACH + 1) if (dx, dy) != (0, 0) and walkable(x + dx, y + dy)]
+        return (npc_type, Spot(m, ('npc', npc_type), tiles)) if tiles else None
+
+    def offer(self, ammo):
+        """(slot, price, Item) of the stack of ammo it buys from the shop it talks to: the best level of which
+        Restock.STACKS cost at most half its zen, else the cheapest it can pay. None."""
+        game, p = self.c.server, self.player
+        offers = []
+        for slot, data in sorted(self.goods.items()):
+            t = data[0] | (data[3] >> 7) << 8
+            if t != ammo or t not in game.item_info:
+                continue
+            item = Item(game.item_info[t], level=data[1] >> 3 & 0x0F, durability=data[2])
+            offers.append((item.level, shop.value(item), slot, item))
+        rich = [o for o in offers if o[1] * Restock.STACKS <= p.zen // 2]
+        if rich:
+            level, price, slot, item = max(rich, key=lambda o: (o[0], -o[2]))
+            return slot, price, item
+        cheap = [o for o in offers if o[1] <= p.zen]
+        if not cheap:
+            return None
+        level, price, slot, item = min(cheap, key=lambda o: (o[1], o[2]))
+        return slot, price, item
+
     # reflexes
 
     def reflexes(self, now):
@@ -474,7 +568,8 @@ class Brain:
                 self.switch(want(self, now), now)
         elif a is None:
             self.switch(self.level_activity(now), now)
-        elif isinstance(a, (Travel, Loot, Equip)) and self.ground is not None and self.attacker(now) is not None:
+        elif isinstance(a, (Travel, Loot, Equip, Restock)) and self.ground is not None \
+                and self.attacker(now) is not None:
             self.switch(Hunt(self, now, self.ground, self.band), now)
         a = self.activity
         if a.timeout is not None and now - a.started > a.timeout:
@@ -487,7 +582,7 @@ class Brain:
     def wanted(self, now):
         """The class of the most urgent activity it wants, None when it may level. It runs from what it can't fight,
         rests below its threshold and when a hunt found nothing it has the life for; with no monster at it, it picks
-        up what it wants and wears its upgrades."""
+        up what it wants, wears its upgrades and buys arrows or bolts for its bow."""
         p = self.player
         if p.dead:
             return Dead
@@ -502,6 +597,8 @@ class Brain:
                 return Loot
             if self.scroll() is not None or self.best_change() is not None:
                 return Equip
+            if self.ammunition_needed(now) is not None:
+                return Restock
         return None
 
     def level_activity(self, now):

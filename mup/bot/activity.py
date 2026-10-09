@@ -2,8 +2,13 @@
 What a bot is doing: small state machines the brain picks by priority (mup.bot.brain). step(now) runs at every
 think and returns None while it goes on, DONE or FAILED when it ended; past its timeout (if it has one) it failed.
 """
+from dataclasses import dataclass
+from typing import List, Tuple
 from mup.bot import career, gear
+from mup.bot.motor import TALK_REACH
+from mup.model.monster import Monster
 from mup.packet.client import CAddPoint
+from mup.packet.server import STalk
 from mup.server import ai, inventory
 from mup.server.path import find_path
 from mup.server.world import VIEW_RANGE, distance
@@ -162,8 +167,10 @@ class Loot(Activity):
             return DONE
         if g.item is not None and inventory.free_slot(p.inventory, g.item.info) is None:
             slot = brain.junk(brain.loot_value(g))
-            if slot is not None and motor.drop(slot):
-                brain.event('drop', item=p.inventory[slot].info.name, room_for=g.item.info.name)
+            if slot is not None:
+                name = p.inventory[slot].info.name  # the answer comes at once
+                if motor.drop(slot):
+                    brain.event('drop', item=name, room_for=g.item.info.name)
             return None
         motor.pick_up(g)
         brain.event('loot', item=g.item.info.name if g.item is not None else 'zen', x=g.x, y=g.y)
@@ -218,6 +225,103 @@ class Equip(Activity):
             brain.event('wear', item=item.info.name, slot=s, gain=round(change.gain, 3))
             return None
         return None
+
+
+@dataclass
+class Spot:
+    """A place to walk to that isn't a hunting ground, the tiles next to an NPC: Travel goes there like to a
+    ground (mup.bot.career.Ground's map_id, key, tiles, center, contains)."""
+    map_id: int
+    key: Tuple
+    tiles: List[Tuple[int, int]]
+
+    @property
+    def center(self):
+        return self.tiles[0]
+
+    def contains(self, map_id, x, y):
+        return map_id == self.map_id and (x, y) in self.tiles
+
+
+class Restock(Activity):
+    """
+    Buys arrows or bolts for its bow or crossbow (mup.bot.brain.Brain.ammunition_needed) from the nearest shop that
+    sells them, on its map or through the gates: walks next to the NPC, talks to it (30), buys stacks (32) one at a
+    time, the best level it can afford (Brain.offer), until it has STACKS more or the zen runs out, then goes. The
+    client sends nothing when a shop window closes, the server closes it when the player walks off. Equip wears
+    them with the bow. A trip that failed isn't tried again for a while.
+    """
+    name = 'restock'
+    priority = ITEMS
+    timeout = 900.0
+    TALK_WAIT = 3.0  # seconds for the shop window after 30
+    STACKS = 4  # stacks it buys on a trip, of the best level STACKS of which cost at most half its zen
+    PAUSE = 300.0  # seconds after a trip that failed before the next
+
+    def __init__(self, brain, now):
+        super().__init__(brain, now)
+        self.ammo = brain.ammunition_needed(now)
+        found = brain.seller(self.ammo) if self.ammo is not None else None
+        self.npc_type, self.spot = found if found is not None else (None, None)
+        self.walk = Travel(brain, now, self.spot) if self.spot is not None else None
+        self.talked_at = None
+        self.bought = 0
+
+    def details(self):
+        if self.spot is None:
+            return {}
+        return {'ammo': self.c.server.item_info[self.ammo].name, 'npc': self.npc_type, 'map': self.spot.map_id,
+                'to': list(self.spot.center)}
+
+    def fail(self, why):
+        self.brain.restock_after = self.c.server.now + self.PAUSE
+        return super().fail(why)
+
+    def step(self, now):
+        brain, motor, p = self.brain, self.motor, self.player
+        if self.walk is None:
+            return self.fail('no shop')
+        if motor.handling():
+            return None
+        if brain.window == STalk.SHOP and brain.goods:
+            if self.bought >= self.STACKS or gear.shots(p, self.ammo) >= self.STACKS * self.stack():
+                return DONE
+            offer = brain.offer(self.ammo)
+            if offer is None:
+                return DONE if self.bought else self.fail('no zen')
+            slot, price, item = offer
+            if inventory.free_slot(p.inventory, item.info) is None:
+                junk = brain.junk(gear.POTION)
+                if junk is None:
+                    return DONE if self.bought else self.fail('no room')
+                name = p.inventory[junk].info.name
+                if motor.drop(junk):
+                    brain.event('drop', item=name, room_for=item.info.name)
+                return None
+            if motor.buy(slot):
+                self.bought += 1
+                brain.event('buy', item=item.info.name, level=item.level, price=price)
+            return None
+        if self.talked_at is not None:
+            if now - self.talked_at < self.TALK_WAIT:
+                return None
+            return self.fail('no shop window')
+        npc = next((o for o in self.c.view if isinstance(o, Monster) and o.npc and o.type_id == self.npc_type), None)
+        if npc is not None and p.map_id == npc.map_id and distance(p.x, p.y, npc.x, npc.y) <= TALK_REACH \
+                and not motor.walking(now):
+            motor.stop()
+            motor.talk(npc)
+            self.talked_at = now
+            return None
+        status = self.walk.step(now)
+        if status == FAILED:
+            return self.fail(self.walk.why)
+        if status == DONE and npc is None:
+            return self.fail('nobody there')
+        return None
+
+    def stack(self):
+        return self.c.server.item_info[self.ammo].durability
 
 
 class Travel(Activity):

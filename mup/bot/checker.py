@@ -4,14 +4,15 @@ breaks the client's rules), and what the server did with it (refusals: the bot's
 are counted on the session (counts 'errors', 'refused'), errors are logged and kept for the tests. A pick up refused
 because the item is another player's for a while isn't a refusal, the client can't tell (counts 'owned').
 
-The answers it waits for count once the bot read them (received): the client sends no 22 or 24 before the last
-one's answer, no 26 and no 24 while item use is locked (docs/protocol-097.md, Items).
+The answers it waits for count once the bot read them (received): the client sends no 22, 24 or 32 before the last
+one's answer, no 26 and no 24 while item use is locked (docs/protocol-097.md, Items), talks (30) from next to the
+NPC and buys only from the shop it talks to.
 """
 import logging
 from mup.bot import motor
-from mup.packet.client import (CAddPoint, CAttack, CDropItem, CMagicAttack, CMove, CMoveGate, CMoveItem, CPickUp,
-                               CUseItem)
-from mup.packet.server import SDurability, SItemDeleted, SLife, SMoveItemResult, SPickUpResult
+from mup.packet.client import (CAddPoint, CAttack, CBuy, CDropItem, CMagicAttack, CMove, CMoveGate, CMoveItem, CPickUp,
+                               CTalk, CUseItem)
+from mup.packet.server import SBuyResult, SDurability, SItemDeleted, SLife, SMoveItemResult, SPickUpResult, STalk
 from mup.server import inventory
 from mup.server.world import distance
 
@@ -25,7 +26,7 @@ class Checker:
         self.c = c
         self.walk_ends_at = 0.0
         self.errors = []  # messages
-        self.waiting = set()  # CPickUp, CMoveItem: the answers it hasn't read yet
+        self.waiting = set()  # CPickUp, CMoveItem, CBuy: the answers it hasn't read yet
         self.locked = False  # item use, until it read the unlock
 
     def received(self, packets):
@@ -35,6 +36,8 @@ class Checker:
                 self.waiting.discard(CPickUp)
             elif isinstance(packet, SMoveItemResult):
                 self.waiting.discard(CMoveItem)
+            elif isinstance(packet, SBuyResult):
+                self.waiting.discard(CBuy)
             elif isinstance(packet, SLife) and packet.type == SLife.UNLOCK \
                     or isinstance(packet, (SItemDeleted, SDurability)) and packet.unlock:
                 self.locked = False
@@ -78,6 +81,18 @@ class Checker:
             return p.inventory.get(packet.source)
         if isinstance(packet, CDropItem):
             return p.inventory.get(packet.slot)
+        if isinstance(packet, CTalk):
+            npc = self.c.server.monsters.get(packet.cid)
+            if npc is not None and distance(npc.x, npc.y, p.x, p.y) > motor.TALK_REACH:
+                self.error('a talk {} tiles from the NPC'.format(distance(npc.x, npc.y, p.x, p.y)))
+            return self.c.window
+        if isinstance(packet, CBuy):
+            if CBuy in self.waiting:
+                self.error('a buy before the last one\'s answer')
+            w = self.c.window
+            if w is None or w.kind != STalk.SHOP:
+                self.error('a buy without a shop open')
+            return p.zen, dict(p.inventory)
         if isinstance(packet, CUseItem):
             if self.locked:
                 self.error('a use while item use is locked')
@@ -119,6 +134,13 @@ class Checker:
         elif isinstance(packet, CDropItem):
             if state is None or p.inventory.get(packet.slot) is state:
                 self.refused('a drop from {}'.format(packet.slot))
+        elif isinstance(packet, CTalk):
+            if self.c.window is None or self.c.window is state:
+                self.refused('a talk to {}'.format(packet.cid))
+        elif isinstance(packet, CBuy):
+            self.waiting.add(CBuy)
+            if (p.zen, p.inventory) == (state[0], state[1]):
+                self.refused('a buy of shop slot {}'.format(packet.slot))
         elif isinstance(packet, CUseItem):
             self.locked = True
             item, durability, skills = state

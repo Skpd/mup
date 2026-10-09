@@ -380,18 +380,43 @@ Done:
   for players, those it can't fight dilute a ground's worth (excluding the ground left level 1 characters nothing,
   budge dragons are near every spider); targets out of reach of the tiles it walks on are skipped; after looting it
   hunts on where it stands when that is near its ground.
+- Arrows and bolts, the first piece of B1b's town trips: a bow or crossbow is weighed with a stack of its
+  ammunition (`gear.armed`, it can be bought), so an elf picks one up when it would shoot better with it; without a
+  bow arrows are junk. Restock (priority items): with a bow it may wear and would use, fewer than 60 shots and the zen
+  for a stack, it walks to the nearest shop that sells them (the shops' goods and the NPCs' spots are the game's
+  data: Amy in Lorencia, Elf Lala in Noria, Isabel in Devias; another map's through the gates), talks to the NPC
+  from next to it (`30`), buys from the list the shop showed it (`31`) up to 4 stacks (`32` one at a time), of the
+  best level of which 4 cost at most half its zen (70 / 1200 / 2000 zen a stack of arrows +0 / +1 / +2), and walks
+  off (the client sends nothing when a shop closes, the server closes it 5 tiles away). Equip wears the arrows and
+  the bow; a spare stack goes into the empty hand when the worn one runs out (the client does that itself). A trip
+  that failed waits 5 minutes. The checker: a `30` from more than a tile, a `32` without a shop open or before the
+  last one's answer are errors, a buy that bought nothing is refused. The motor shoots from the client's reach now
+  (`0x4650a0`, in the doc): 1.8 tiles, 2.2 with a spear, 6 with a bow or crossbow. On the real data the elf's build
+  (strength 3 : agility 4) makes the short bows of Noria's spiders and goblins worth less than a small axe: it
+  picks up the first bow that is better (seed 3, 4 hours: a short bow before any axe, arrows bought twice, then a
+  short sword and the bow dropped). Test: an elf with a short bow and 1000 zen buys 4 stacks of arrows from Amy,
+  wears both and shoots the spider.
+- Stuck for good, found by an elf left alone for 24 hours (seed 1, from 17:45): a Hunter (attack range 4) stood on
+  the tiles of Noria's gate to Lorencia and shot the elf on the arrival area. Bots don't step on a gate they don't
+  take, so no path reached it; it was left alone after 3 tries, but an attacker came first whatever was left alone:
+  a failed path every think, no step, no exp (the watchdog's new ground put it back on the same attacker). An
+  attacker is chosen now only when it isn't left alone and a tile the bot walks on is next to it; one hitting it
+  that it can't get at is a danger, it runs out of range. 24 hours of that elf: level 28, never stuck. Test: an
+  archer on the gate's tiles, the bot runs.
 - `tests/sim.py` (10 s): the spider's sword, potion and zen picked clean and the sword worn, a puppet gets the `25`;
+  with a grid full of junk it drops some for the sword;
   two drinks hit by the dragon, `2A` then `28`; a wizard learns fire ball from the spider's scroll and casts it; a
   knight with a leather helm puts its points into strength and wears the helm at level 3; a wizard with flame casts
   it at the goblins and reports them in `1D`; a level 10 bot whose only ground is in Noria goes through the gate and
-  hunts there. None breaks the client's rules. In `tests/client.py` the bot hunts the test dragons, which drop
-  nothing: a GM drops a short sword there, the client sees the bot wear it (`25`), its `22` and `24` are in the packet
-  log under its cid. On the real clock the checker found a walk "0.00 s before the last one ended": the motor works
-  with the tick's time, the session read the clock again when it sent; a bot's packets carry the tick's time now.
+  hunts there; shot by an archer on a gate's tiles, it runs. None breaks the client's rules. In `tests/client.py`
+  the bot hunts the test dragons, which drop nothing: a GM drops a short sword there, the client sees the bot wear
+  it (`25`), its `22` and `24` are in the packet log under its cid. On the real clock the checker found a walk
+  "0.00 s before the last one ended": the motor works with the tick's time, the session read the clock again when
+  it sent; a bot's packets carry the tick's time now.
 - `bin/sim.py`: the report has the items, zen, potions, skills learned, pieces worn, refused pick ups of others'
   drops ("owned"), what it wears and the maps it went to with the game time; `--grounds` the best ground of each map
-  the gates reach. 4 hours at exp rate 1, seeds 1..6, the class averages from B0 to B1: knights 7.2 -> 13.3,
-  wizards 8.2 -> 12.2, elves 9.0 -> 10.2, gladiators 7.0 -> 14.2; no errors, nothing refused, 1..7 deaths per bot.
+  the gates reach. 4 hours at exp rate 1, seeds 1..6, the class averages from B0 to B1: knights 7.2 -> 13.0,
+  wizards 8.2 -> 11.7, elves 9.0 -> 10.8, gladiators 7.0 -> 15.2; no errors, nothing refused, 1..7 deaths per bot.
   Done check: a gladiator alone (seeds 1, 2, 3, 6 hours) goes from Lorencia to Noria at 3:35..4:08, at level 15 or
   so, wearing a kris or two axes, a helm, gloves and boots it looted. Knights and wizards alone stay in Lorencia up
   to level 15..17 in 6 hours: for them Noria is at most about 10% better, under the margin (8 bots on seed 1, 6
@@ -407,13 +432,28 @@ Done:
 
 After B1, shops are there since M5.
 
-- Sell what is worth less than its slot, buy potions and arrows / bolts, repair below a durability share (M5 wear),
-  the vault for what the bot keeps but doesn't carry.
+- Sell what is worth less than its slot, buy potions and arrows / bolts (arrows and bolts are done, B1), repair below
+  a durability share (M5 wear), the vault for what the bot keeps but doesn't carry.
 - Restock as an activity between survive and level: low on potions, arrows or durability, or a full grid, walks to
-  the nearest town's NPC, talks (`30`), buys / sells / repairs, closes the window, goes back to its ground.
+  the nearest town's NPC, talks (`30`), buys / sells / repairs, walks off (the client sends nothing when a shop
+  closes), goes back to its ground. B1's `Restock` (arrows and bolts) is the start: the walk to an NPC, the talk,
+  the list the shop shows (`31`), one `32` at a time.
+- Upgrades from the shops: what each NPC sells is the game's data (the shop files, as players know it), priced by
+  the client's formula (`shop.value`). Each piece weighed by `gear.value` against its price; a budget keeps zen for
+  potions and repair; a trip for the best affordable upgrade when it adds enough, or on the way of a restock.
+- Elves as archers: Eo the Craftsman (Noria's town) sells bows and crossbows with their skill, luck and + 4 damage
+  (Short Bow 600, Crossbow + 1 1900, Bow 2400, Golden Crossbow + 3 17 300, Elven Bow + 2 19 200, Arcubus + 3 36 700,
+  Battle Bow + 3 57 900), Elf Lala the vine, silk and wind sets + 0..+ 3 with luck and an option. Three changes to
+  the career and gear so a bow is worth what it is:
+  - the build agility first, e.g. 1 : 6 : 2 : 1 (measured in B1: better with melee weapons too, agility counts for
+    an elf's damage either way and gives speed and defense; 13.0 against 10.1 exp/s with a hand axe at level 10);
+  - the bow's skill: multiple arrow (24, an area skill, radius 6, 5 mana) counted in the fight model with the
+    targets it would hit by the ground's density (the model counts single target skills only, the brain already
+    uses area skills in fights), or count how many arrows hit a single target (increasing damage);
+  - the reach: shooting from 6 tiles, less walking to the next monster and fewer hits while one comes.
 
 Done when: a bot that runs out of potions walks to town, sells its junk, buys potions, repairs and goes back to its
-hunting ground.
+hunting ground; an elf with the zen buys a bow with its skill from Eo and hunts with it.
 
 ## B2 bots: party, whisper, trade
 
