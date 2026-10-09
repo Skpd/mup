@@ -1,4 +1,4 @@
-from mup.packet.base import Packet, C1, Text, str10, u8
+from mup.packet.base import Packet, C1, Text, str10, u8, u16be
 
 
 class Chat(Packet):
@@ -26,4 +26,14 @@ class WhisperFailed(Packet):
     size = 4
     fields = (
         (3, 'result', u8, 0),
+    )
+
+
+class ObjectMessage(Packet):
+    """C1 01: a bubble over the object [3..4] (big endian, bit 15 not masked) with the text [5..], its name in front.
+    The object must be in the client's view."""
+    code = C1, 0x01
+    fields = (
+        (3, 'cid', u16be),
+        (5, 'message', Text()),
     )

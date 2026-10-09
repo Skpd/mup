@@ -56,6 +56,6 @@ def mix_handler(msg: CMix, proto: BaseProtocol):
 
 
 def chaos_close_handler(msg: CChaosClose, proto: BaseProtocol):
-    if proto.player is None or not chaos.is_open(proto):
+    if proto.player is None:
         return
-    npc.close(proto.server, proto)
+    npc.close_chaos(proto.server, proto)

@@ -15,9 +15,11 @@ Packet codes are hex, details in `docs/protocol-097.md`. Where a code's meaning 
 | M4 combat and progression | done |
 | M5 NPCs, shops, warehouse, chaos machine | done |
 | M6 social: whisper, party, trade | done, real client check pending |
-| M7 guilds, quests, events, PK | todo |
-| B0 bots: session, hunting, levelling (after M2) | todo |
-| B1 bots: items, shops, map progression (after M3..M5) | todo |
+| M7 guilds, quests, events, PK | done, real client check pending |
+| S0 fast tests and replay: game clock, puppets, scenarios (before B0, `docs/bots.md`) | todo |
+| B0 bots: session, hunting, levelling (after S0) | todo |
+| B1 bots: items, skills, map progression (after M3, M4) | todo |
+| B1b bots: town trips: sell, buy, repair (after B1, M5) | todo |
 | B2 bots: party, whisper, trade (after M6) | todo |
 | B3 bots: guilds, quests, events (after M7) | todo |
 
@@ -565,82 +567,82 @@ Steps:
 
 Not in M7: Blood Castle, Chaos Castle and the other later events, guild alliances, duels.
 
+Done:
+- Doc, all from code: [PK](protocol-097.md#pk) (`F3 08`, the name colours, how the client picks a player to attack:
+  Ctrl held, murderers of level 6 with a click; `15` / `19` / `1D` carry the player's cid), `01` reviewed (an NPC's
+  bubble), what the two quests want and give in [Quest window](protocol-097.md#quest-window),
+  [Guilds](protocol-097.md#guilds) with `50`..`57`, `5A`..`5D` both ways and the war `60`..`64` (not used),
+  [Devil Square](protocol-097.md#devil-square) with `90`..`93` both ways, `37`'s guild number. `94`..`99` belong to
+  the Golden Archer's Rena event, not to Devil Square (located only). The guild master's window opens with `54`
+  (not `30`), the client sends the guild packets as C1, `90` carries the invitation's grid tile + 0x18.
+- PK (`pk.py`): players from level 6 hit each other outside safe zones (`combat.target_of`: weapon, skills, area
+  hits and poison), not in the same party. The damage goes to both and the viewers, armor wears, reflect hits back.
+  A kill of a non murderer who didn't attack first counts one up (level 3 + count: 4..6), self defense lasts 60 s
+  after the last hit or until one of them dies, a kill of a murderer makes a hero (count down to -3, levels 2..0),
+  nothing counts in the Arena. `F3 08` to the killer and its viewers, the level in `12` and `F3 03`, saved with
+  `pk_time` (migration 6): the count goes one step back to 0 per 30 minutes in game (mup's choice). Murderers lose
+  an item on any death (25 / 50 / 100% at levels 4 / 5 / 6, mup's numbers), from level 5 shops send them away (`01`),
+  guards (247, 249) hit them in town too and nobody parties with them. GM `/pk n`.
+- Quests (`quest.py`, the client's `data/Quest.bmd`): states in `quest_state` (50 bytes, 3 = not started) where the
+  client reads them (its bit position bug), `A0` on entering and on request. Sevina answers `30` with `A1` on the
+  first quest of the class not done; `A2` takes the zen and accepts, then takes the item and finishes, a refusal
+  shows the window again (`A1`). Rewards (the later server's `QuestReward.txt`): `A3 C8` 10 points for each quest,
+  `A3 C9` the second class for quest 1, seen by the viewers, saved, then `A0` again for the client's quest class.
+  Quest items drop for a player with the quest accepted, from monsters of level 45..60 / 62..76 at 1% (times the
+  drop rate). Magic gladiators get dialog 73 (quest 0's level 10000).
+- Guilds (`guild.py`, `repository/guild.py`, the M1 tables): in memory, each change written at once. The guild master
+  (241) from level 100 without a guild: `54`, `55`, `56` (4..8 letters or digits, a free name, a mark), `57`
+  cancels. `/guild` at a master (`50`): level 6, not in a guild, the master's level / 10 members at most, the
+  master's answer within 60 s (`51`). `52` the members (online ones marked), `53` with the personal code: leave, the
+  master puts out or disbands. Players see guilds with `5A` (the guilds a client doesn't know yet) and `5B`, `5D`
+  when gone; `@` chat to the members in game, the trade window's mark. Deleting a master's character disbands.
+- Devil Square (`devil_square.py`, `[events]` in the config): rounds at the configured times (the later server's six
+  a day), Charon lets players in for 5 minutes before (`30 4`, else `91` with the minutes), `90` checks the client's
+  square levels (magic gladiators 1.5 times), the invitation of the square's level (or 0) and 10 players per square.
+  Round of 20 minutes: map 9's monster areas of the later spawn file (one per square, by its arrival gate) come out,
+  a kill scores the monster's level, `92` counts down the entry and the round. At the end the monsters go, each
+  square's players with points get exp (times the exp rate) and zen by rank (the later server's tables), the ranking
+  `93`, and go back to Noria 10 s later (`F3 04` brings the exp and money). Death sends to Noria, a player saved in
+  Devil Square enters in Noria. Devil's eyes and keys drop 0.5% (times the drop rate) at levels 1..4 by the monster's
+  level (mup's bands), the chaos machine mixes the invitation at the client's rates and zen. GM `/ds` opens a round
+  now.
+- Real client: the guild join question crashed the master's client: `Text.bmd` 429 (and 419, the trade question) hold
+  a `%s` the client formats without an argument. Fixed in the client's file with `tools/fix_client.py` (the
+  original kept as `Text.bmd.orig`), see the protocol doc's Extending the client.
+- Real client: the second class sets and weapons, the quest items, the orb of twisting slash, skill 42 and quest 0
+  show garbage: the Chinese translation left their names in Korean. `tools/fix_client.py` writes the English names
+  of `Item.txt` / `Skill.txt` into the client's `item.bmd`, `skill.bmd`, `Quest.bmd`. Text was hard to read: no font
+  face (wine picks one) and wine's font smoothing, which the client's 1 bit text turns into fat glyphs; the tool sets
+  Verdana (`Text.bmd` 0), smoothing is off in the wine prefix. `item.bmd` and `skill.bmd` end in a checksum the
+  client checks ("File corrupted"), the tool writes it (the doc had it as not checked). `Item.txt` / `Skill.txt` otherwise agree with the
+  client (weapon skills, luck and options, skill numbers); mup takes names, damage, mana, sizes and requirements
+  from the client's files anyway.
+- Real client: a mix of level 0 eye and key (GM `/item` without a level) got `86 3`, which leaves the client's mix
+  button dead and the window unclosable with the items in the box. A mix mup doesn't make now fails with the box
+  (`86 0`, `31`), and level 0 makes a level 0 invitation (the client's Devil Square window takes it for every square)
+  at level 1's rate and zen. The machine's close button only sends `87` and waits for `87` back to close the window
+  (the doc said it closed itself), the server answers it now.
+- Also: `Entry(start=)` for list packets with fields after the count (`52`), item names `item.bmd` has in Korean
+  come from `Item.txt` (a GM `/item` notice failed on them), `experience.add` for exp without a kill.
+- Test: A kills B after B hit her (self defense, no `F3 08`), again (`F3 08` 4 to both, `F3 03` / `12` after a
+  relog); at level 6 a guard kills her, she loses an item (`28`, `20`), Amy sends her away (`01`), no party (`41 0`).
+  B's quests at level 150 (`A0`, `A1`, `A2` with the zen and the items taken, `A3 C8`, `A3 C9` seen by A, the class in
+  the database, the char list and `12`, `A0` on entering). A creates a guild (`54`, `55`, `56` 2 / 1, `5A`, `5B`),
+  B joins (`50`, `51`, `5B` on both), the list (`52`), `@` chat, B leaves with a wrong and the right code (`53`
+  0 / 1, `5D`), A disbands. B mixes a +2 invitation, Charon says 255 minutes without rounds, `/ds`, `92`, the window,
+  the first square refused (`90 3`), the second taken (`28`, `90 0`, `1C` to gate 59), a kill, `92 2`, the ranking
+  (`93`) and Noria with the zen (`F3 04`). The test config has rounds of 6 s.
+- Left: guild war (`60`..`64`), the Golden Archer, mana shield and the other second class skills' effects, the
+  quest and guild master windows aren't closed by the server (`82` doesn't), a murderer's respawn place, PK and
+  murderers in Devil Square follow the usual rules (nothing special).
+
 ## Bots
 
-AI players: ordinary accounts and characters that start at level 1, play through the same rules as clients and grow
-by a career plan. Each B milestone follows the M milestones it needs.
-
-Design:
-- In process, no socket: a `BotSession` is a connection the game can't tell from a client. `view.py` shows every
-  non monster connection as a player, so real clients see bots with no extra packets.
-- Input: the bot builds client packets (`CMove`, `CAttack`, `CJoinGame`, ...) and dispatches them through
-  `server.handlers` like `protocol.py` does. Bots can do nothing a client can't, every server check applies to them.
-- Output: `write()` hands the built server packets to the brain. `Packet` keeps its values as attributes, so they are
-  typed events (`SDamage`, `SKill`, `SLevelUp`, later trade and party requests) without parsing.
-- Perception: `c.view`, what a client standing there has been shown.
-- Brain in three layers:
-  - career: hunting grounds derived from data, not hand written. `Monster.txt` levels and `MonsterSetBase.txt`
-    spawns grouped by map and area; pick the one near the bot's level. Map progression from the `Gate.bmd` graph
-    (entrance -> target, minimum level, MG 2/3). Stat build per class as point ratios. Personality: risk, greed,
-    chattiness, play schedule (log in and out in sessions, progress only while online).
-  - activity: small state machines (travel, hunt, loot, rest, restock / sell, trade, idle in town) with timeouts,
-    picked by priority every few seconds: survive > restock > sell / repair > upgrade > level.
-  - motor: `path.find_path` for short paths, cached gate to gate waypoints for long ones, attack speed cadence,
-    skill choice by mana and range.
-- Driven by the M2 game tick, each bot thinks every 0.5..1 s, staggered. No timers of its own.
-- Storage: a migration with `bots (character_id, personality, career state as JSON, rng seed, schedule)`. Bot
-  characters are ordinary `characters` rows saved by `GameServer.save`. `bin/account.py` creates bots.
-- Bots get items and zen only from the drops, shops and kills players get, nothing out of thin air.
-- Players can tell a bot when they ask or trade with it.
-
-## B0 bots: session, hunting, levelling
-
-- `Session` base for `BaseProtocol` and `BotSession` (cid, acc, player, view, playing, write). Move logic the
-  handlers reach through the connection (`send_all`, which skips non `BaseProtocol` connections) into `mup/server`.
-- Bot accounts and characters: the `bots` table, creation in `bin/account.py`, login without a password (set
-  `acc`, dispatch `CJoinGame`), cids from the player range.
-- Walk pacing: `move_handler` sets the position to the walk target at once, a bot sends short segments and waits
-  for each like M2 monsters do (`next_step_at`). Measure the real client's walk speed per tile from logged traffic.
-- Hunting grounds from `Monster.txt` / `MonsterSetBase.txt`, hunt / rest / return to town, death and respawn.
-- Stat points through `F3 06` (handler still to write, see M4) by the class build.
-- A simulation script: game and bots without sockets on a fast clock (`GameServer.now`), reports levels over
-  simulated hours. Used to balance exp rates and bot behaviour.
-
-Done when: the test's client sees a bot appear, walk, attack and kill; the simulation takes bots of all four
-classes a few levels up without getting stuck; the real client watches a bot hunt outside Lorencia.
-
-## B1 bots: items, shops, map progression
-
-- Loot (`22`), potions (`26`), equip upgrades by class and stat requirements, gear requirements feed the stat build.
-- Town trips: sell, buy potions, repair (M5 shops).
-- Skills (M4), map progression through gates as levels unlock the next hunting ground.
-
-Done when: a bot left alone goes from Lorencia to the next map's hunting ground with better gear than it started
-with.
-
-## B2 bots: party, whisper, trade
-
-- Party: accept invites from players near the bot's level, follow the leader, share exp.
-- Whisper and chat: canned lines per situation, a tiny command grammar (`price X`, `buy X`, `sell X`), wts / wtb
-  ads in town chat. A language model for chat lines only, optional: async, with a timeout, never in the tick, no
-  decisions.
-- Item value: base price from `Item/ItemValue.txt` / `Shop/*.txt`, use to the bot (upgrade for its class and
-  stats, jewels it needs), market memory: a `trades` log table, median price per item, level and options.
-- Bot to bot: a server side order book matches wants and offers, bots meet in town and trade through the real
-  `36`..`3D` flow so players see it.
-- Bot to player: trade requests arrive as events, the bot checks every change of the window against its reserve
-  price, accepts only after the other side has been unchanged for ~2 s, never takes unknown items, daily spend cap
-  per bot.
-
-Done when: a player buys an item from a bot and sells one to it in the real client; two bots trade with each other
-in Lorencia.
-
-## B3 bots: guilds, quests, events
-
-- Join and create guilds, second class quest when the career reaches it, Devil Square entry.
+AI players that play through the same rules as clients: design, S0 (fast tests and replay, before B0) and the steps
+of B0..B3 are in `docs/bots.md`. Each B milestone follows the M milestones it needs, its status is in the table above.
 
 ## Reverse engineering backlog
 
-- Unknown server packets: `01` and `0B` (located in M6, not reviewed), `03` (a check the client answers), `1A`,
-  `71`, `F1 04` / `05` / `12`, `F3 07` / `08` / `13` / `20` / `22` / `23` / `40`.
-- Client packets missed by the sender index, and `97`, `98`, `C1`.
+- Unknown server packets: `0B` (located in M6, not reviewed), `03` (a check the client answers), `1A`, `71`,
+  `F1 04` / `05` / `12`, `F3 07` / `13` / `20` / `22` / `23` / `40`, the Golden Archer's `94`..`96`, `99`.
+- Client packets missed by the sender index, and `97`, `98` (Golden Archer), `C1`.

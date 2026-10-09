@@ -4,7 +4,10 @@
 #
 # usage: ./run-client.sh [client dir] [desktop size] [desktop name]
 #   desktop size should match the client resolution set in the wine registry
-#   (HKCU\Software\Webzen\Mu\Config\Resolution: 0 - 640x480, 1 - 800x600, 2 - 1024x768, 3 - 1280x1024)
+#   (HKCU\Software\Webzen\Mu\Config\Resolution: 0 - 640x480, 1 - 800x600, 2 - 1024x768, 3 - 1280x1024;
+#   4 - 1600x1200 has no font size in the client, its text is unreadable)
+#   Text is crisp with font smoothing off in the prefix (HKCU\Control Panel\Desktop FontSmoothing "0") and the
+#   fixed client data files (tools/fix_client.py).
 #   desktop name defaults to a unique one per run, so several clients can run side by side.
 #   Clients started with the same name share one desktop and fight over its resolution.
 #

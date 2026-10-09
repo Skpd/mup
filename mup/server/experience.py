@@ -100,7 +100,20 @@ def gain(game, c, exp, killed, damage, quiet=False):
         c.write(SExp.of(killed | (0x8000 if quiet or not first else 0), part, damage if first else 0))
         exp -= part
         first = False
+    level_ups(game, c)
 
+
+def add(game, c, exp):
+    """c's player gets exp without a kill (a reward): the client learns its exp with the next F3 03 / F3 04, the level
+    ups come with F3 05."""
+    p = c.player
+    p.exp += max(0, min(exp, level_exp(MAX_LEVEL) - p.exp))
+    level_ups(game, c)
+
+
+def level_ups(game, c):
+    """The levels c's player's exp reached: level up points, full life and mana, F3 05, saved."""
+    p = c.player
     levels = 0
     while p.level < MAX_LEVEL and p.exp >= p.next_exp:
         p.level += 1

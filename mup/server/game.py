@@ -9,8 +9,9 @@ from mup.packet.server import SServerJoin, SStats, SMeetPlayer, SSkillList, SMov
 from mup.repository import database
 from mup.repository.account import AccountRepository
 from mup.repository.character import CharacterRepository
-from mup.server import (ai, chaos, combat, effect, gate, ground, inventory, item, loot, monster, npc, party, shop,
-                        skill, stats, summon, trade, view)
+from mup.repository.guild import GuildRepository
+from mup.server import (ai, chaos, combat, devil_square, effect, gate, ground, guild, inventory, item, loot, monster,
+                        npc, party, pk, quest, shop, skill, stats, summon, trade, view)
 from mup.server.base import ServerBase
 from mup.server.character import respawn_gate
 from mup.server.world import load_maps
@@ -21,6 +22,7 @@ TERRAIN_PATH = 'data/terrain'  # the client's World*/Terrain*.att
 GATE_PATH = 'data/Gate.bmd'  # the client's
 ITEM_PATH = 'data/item.bmd'  # the client's
 SKILL_PATH = 'data/skill.bmd'  # the client's
+QUEST_PATH = 'data/Quest.bmd'  # the client's
 TICK = 0.1  # seconds between game ticks
 
 
@@ -43,18 +45,23 @@ class GameServer(ServerBase):
         self.skills = skill.load(SKILL_PATH, config.skill_info)
         self.shops = shop.load(config.shops, self.item_info)  # NPC type -> Shop
         self.mixes = chaos.load(config.mixes)
+        self.quests = quest.load(QUEST_PATH)
         self.ground = ground.Ground()
 
         self.db = database.connect(config.db_path)
         self.accounts = AccountRepository(self.db)
         self.characters = CharacterRepository(self.db, self.item_info)
         self.serials = count(self.characters.last_item_serial() + 1)  # of new items
+        self.guild_store = GuildRepository(self.db)
+        self.guilds, self.guild_of = {}, {}  # guild id -> Guild, character id -> Guild (mup.server.guild)
+        guild.load(self)
 
         self.maps = load_maps(TERRAIN_PATH)
         self.gates = gate.load(GATE_PATH)
         self.monster_info = info = monster.load_info(config.monster_info)
         spawns = monster.load_spawns(config.monster_spawns, info)
-        self.monsters = {m.cid: m for m in monster.create(spawns, info, count(1), self.first_player_cid - 1)}
+        ids = count(1)
+        self.monsters = {m.cid: m for m in monster.create(spawns, info, ids, self.first_player_cid - 1)}
         self.dead_monsters = set()
         self.affected = set()  # players (connections) and monsters with effects, mup.server.effect
         now = self.now
@@ -68,6 +75,10 @@ class GameServer(ServerBase):
         npcs = sum(m.npc for m in self.monsters.values())
         logger.info('%s monsters and %s NPCs on %s maps', len(self.monsters) - npcs, npcs,
                     len({m.map_id for m in self.monsters.values()}))
+        # Devil Square's monsters come out with its rounds
+        self.devil_square = devil_square.create(
+            self, monster.load_spawns(config.monster_spawns, info, {monster.DEVIL_SQUARE}), ids,
+            self.first_player_cid - 1)
         # summons take the monster ids left
         self.summon_cids = deque(range(max(self.monsters, default=0) + 1, self.first_player_cid))
         logger.info('%s item types, fixed drops for %s monster types, %s shops', len(self.item_info),
@@ -117,6 +128,7 @@ class GameServer(ServerBase):
             self._run(self._player_tick, c, now)
         if self.parties:
             self._run(party.tick, self, now)
+        self._run(devil_square.tick, self, now)
         if now >= self.next_save:
             self.next_save = now + self.config.autosave_interval
             self._run(self.save_all)
@@ -133,6 +145,7 @@ class GameServer(ServerBase):
         p = c.player
         npc.check(self, c)
         trade.check(self, c)
+        pk.tick(self, c, now)
         if p.respawn_at is not None:
             if now >= p.respawn_at:
                 combat.respawn(self, c)
@@ -159,13 +172,18 @@ class GameServer(ServerBase):
     def enter_world(self, c, p):
         """c enters the game with character p: character info, then the player appears on its map."""
         m = self.maps.get(p.map_id)
-        if p.dead or m is None or not m.terrain.walkable(p.x, p.y):
-            # died and left, or stands where nobody can
+        if p.dead or m is None or not m.terrain.walkable(p.x, p.y) or p.map_id == devil_square.MAP:
+            # died and left, stands where nobody can, or left Devil Square
             p.map_id, p.x, p.y = self.gate_spot(respawn_gate(p.map_id if m is not None else 0))
             p.life = p.max_life
         p.respawn_at = None
         p.next_regen_at = self.now + combat.REGEN_INTERVAL
         p.walk_path = []
+        c.pk_clock = self.now
+        c.self_defense = {}
+        c.guild = self.guild_of.get(p.id)
+        c.guild_question = None
+        c.known_guilds = set()
         c.player = p
         c.playing = True
         c.view = set()
@@ -179,9 +197,11 @@ class GameServer(ServerBase):
         c.write(SStats.of(p))
         inventory.send(c)
         c.write(SMeetPlayer.of([(c.cid, p)]))
+        view.guilds(c, [c])
         c.write(SSkillList.of(p.skills))
         if p.key_settings:
             c.write(SKeySettings.of(p.key_settings))  # after the list, the client finds the hotkeys' skills in it
+        quest.send_states(c)
         self.maps[p.map_id].add_player(c)
         view.refresh(self, c)
 

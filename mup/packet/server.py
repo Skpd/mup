@@ -39,7 +39,20 @@ from mup.packet.server_packet.npc import (Talk as Talk097, ItemList as ItemList0
                                           WarehouseMoney as WarehouseMoney097, WarehouseClosed as WarehouseClosed097,
                                           MixResult as MixResult097, ChaosClosed as ChaosClosed097)
 from mup.packet.server_packet.chat import (Chat as Chat097, Whisper as Whisper097,
-                                           WhisperFailed as WhisperFailed097)
+                                           WhisperFailed as WhisperFailed097, ObjectMessage as ObjectMessage097)
+from mup.packet.server_packet.pk import PkLevel as PkLevel097
+from mup.packet.server_packet.devil_square import (DevilSquareResult as DevilSquareResult097,
+                                                   DevilSquareTime as DevilSquareTime097,
+                                                   DevilSquareCountdown as DevilSquareCountdown097,
+                                                   DevilSquareRanking as DevilSquareRanking097)
+from mup.packet.server_packet.guild import (GuildRequest as GuildRequest097, GuildResult as GuildResult097,
+                                            GuildList as GuildList097, GuildLeaveResult as GuildLeaveResult097,
+                                            GuildMasterQuestion as GuildMasterQuestion097,
+                                            GuildEditor as GuildEditor097, GuildCreateResult as GuildCreateResult097,
+                                            GuildInfos as GuildInfos097, GuildMembers as GuildMembers097,
+                                            GuildMember as GuildMember097, GuildGone as GuildGone097)
+from mup.packet.server_packet.quest import (QuestStates as QuestStates097, QuestDialog as QuestDialog097,
+                                            QuestResult as QuestResult097, QuestReward as QuestReward097)
 from mup.packet.server_packet.party import (PartyRequest as PartyRequest097, PartyResult as PartyResult097,
                                             PartyList as PartyList097, PartyLeft as PartyLeft097,
                                             PartyLife as PartyLife097)
@@ -105,6 +118,27 @@ SChaosClosed = ChaosClosed097
 SChat = Chat097
 SWhisper = Whisper097
 SWhisperFailed = WhisperFailed097
+SObjectMessage = ObjectMessage097
+SPkLevel = PkLevel097
+SDevilSquareResult = DevilSquareResult097
+SDevilSquareTime = DevilSquareTime097
+SDevilSquareCountdown = DevilSquareCountdown097
+SDevilSquareRanking = DevilSquareRanking097
+SGuildRequest = GuildRequest097
+SGuildResult = GuildResult097
+SGuildList = GuildList097
+SGuildLeaveResult = GuildLeaveResult097
+SGuildMasterQuestion = GuildMasterQuestion097
+SGuildEditor = GuildEditor097
+SGuildCreateResult = GuildCreateResult097
+SGuildInfos = GuildInfos097
+SGuildMembers = GuildMembers097
+SGuildMember = GuildMember097
+SGuildGone = GuildGone097
+SQuestStates = QuestStates097
+SQuestDialog = QuestDialog097
+SQuestResult = QuestResult097
+SQuestReward = QuestReward097
 SPartyRequest = PartyRequest097
 SPartyResult = PartyResult097
 SPartyList = PartyList097

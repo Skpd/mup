@@ -1,11 +1,11 @@
 """
 Monster behaviour, run by the game tick for the monsters near players: wander around the spawn spot, chase a player
 that comes within view range, attack it within attack range, return when it is lost or too far from home. NPCs
-stand, traps hit who comes within their attack range.
+stand, traps hit who comes within their attack range, guards the murderers within theirs.
 """
 import random
 from mup.packet.server import SAction
-from mup.server import combat, effect, monster, summon, view
+from mup.server import combat, effect, monster, pk, summon, view
 from mup.server.path import direction, find_path
 from mup.server.world import VIEW_RANGE, distance
 
@@ -35,6 +35,8 @@ def update(game, mob, now):
     if mob.npc:
         if mob.type_id in monster.TRAPS:
             trap_update(game, mob, now)
+        elif mob.type_id in monster.GUARDS:
+            guard_update(game, mob, now)
         return
     if mob.path and now >= mob.next_step_at:
         step(game, mob, now)
@@ -123,6 +125,17 @@ def trap_update(game, mob, now):
         return
     near = [c for c in game.maps[mob.map_id].players.near(mob.x, mob.y, mob.info.attack_range)
             if can_target(game, mob, c)]
+    if near:
+        attack(game, mob, min(near, key=lambda c: distance(mob.x, mob.y, c.player.x, c.player.y)), now)
+
+
+def guard_update(game, mob, now):
+    """A guard hits the nearest murderer (mup.server.pk.PUNISHED) within its attack range, in a safe zone too, at
+    its attack speed. It stays where it stands."""
+    if now < mob.next_attack_at:
+        return
+    near = [c for c in game.maps[mob.map_id].players.near(mob.x, mob.y, mob.info.attack_range)
+            if c.player is not None and c.playing and not c.player.dead and pk.refused(c)]
     if near:
         attack(game, mob, min(near, key=lambda c: distance(mob.x, mob.y, c.player.x, c.player.y)), now)
 

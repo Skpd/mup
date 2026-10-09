@@ -43,6 +43,11 @@ monster_info = {monsters}
 monster_spawns = {spawns}
 item_drops = {drops}
 mixes = {mixes}
+[events]
+devil_square_times =
+devil_square_entry = 2
+devil_square_length = 6
+devil_square_close = 2
 [accounts]
 personal_code = {code}
 [log]
@@ -65,6 +70,10 @@ MONSTERS = """
 240 1 "Safety Guardian" 2 50 0 15 30 70 20 10 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0
 251 1 "Hanzo the Blacksmith" 20 1000 0 15 30 70 20 100 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0
 253 1 "Potion Girl Amy" 2 50 0 15 30 70 20 10 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0
+235 1 "Sebina the Priest" 2 50 0 15 30 70 20 10 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0
+241 1 "Royal Guard Captain Lorence" 2 50 0 15 30 70 20 10 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0
+237 1 "Charon" 2 50 0 15 30 70 20 10 30 0 0 0 5 400 1500 10 0 0 0 0 0 0 0 0 0
+249 1 "Guard" 90 10000 0 1000 1000 0 0 1000 0 0 0 2 2 400 1500 10 1 0 0 0 0 0 0 0 0
 end
 """
 # MonsterSetBase single monsters (type, map, leash, x, y, direction), each appears within 3 tiles of its spot:
@@ -76,8 +85,12 @@ DRAGON_SPOT = (200, 100)
 HOUND_SPOT = (90, 128)
 GOBLIN_SPOT = (190, 140)
 GOLEM_SPOT = (210, 160)
-# NPCs (section 0: type, map, range, x, y, direction) in Lorencia's town north of the start area, the trap outside
+# NPCs (section 0: type, map, range, x, y, direction) in Lorencia's town north of the start area, the trap outside.
+# Sevina and the guild master west of them, a guard (killing with one hit within 2 tiles) south west of the start area
 AMY, HANZO, VAULT_KEEPER, CHAOS_GOBLIN = (253, (142, 114)), (251, (145, 114)), (240, (148, 114)), (238, (151, 114))
+SEVINA, GUARD, GUILD_MASTER, CHARON = (235, (124, 114)), (249, (118, 140)), (241, (130, 112)), (237, (134, 110))
+# Devil Square (map 9): a dragon in square 2, on the middle of its arrival gate 59 (x 135..142, y 162..170)
+DS_DRAGON = (138, 166)
 TRAP_SPOT = (200, 145)
 SPAWNS = """
 0
@@ -86,6 +99,10 @@ SPAWNS = """
 240 00 00 {} {} 03
 238 00 00 {} {} 03
 101 00 00 {} {} 01
+235 00 00 {} {} 03
+249 00 00 {} {} 03
+241 00 00 {} {} 03
+237 00 00 {} {} 03
 end
 2
 003 00 30 {} {} -1
@@ -96,11 +113,17 @@ end
 007 00 30 {} {} -1
 028 00 30 {} {} -1
 end
-""".format(*AMY[1], *HANZO[1], *VAULT_KEEPER[1], *CHAOS_GOBLIN[1], *TRAP_SPOT, *SPIDER_SPOT, *DRAGON_SPOT,
-           *HOUND_SPOT, *GOBLIN_SPOT, *GOBLIN_SPOT, *GOBLIN_SPOT, *GOLEM_SPOT)
-# chaos machine mixes (name, rate %, zen, luck %): the +10 mix is certain, the others as the client shows them
+1
+002 09 30 {} {} {} {} -1 1
+end
+""".format(*AMY[1], *HANZO[1], *VAULT_KEEPER[1], *CHAOS_GOBLIN[1], *TRAP_SPOT, *SEVINA[1], *GUARD[1],
+           *GUILD_MASTER[1], *CHARON[1], *SPIDER_SPOT, *DRAGON_SPOT, *HOUND_SPOT, *GOBLIN_SPOT, *GOBLIN_SPOT,
+           *GOBLIN_SPOT, *GOLEM_SPOT, *DS_DRAGON, *DS_DRAGON)
+# chaos machine mixes (name, rate %, zen, luck %): the +10 mix and the invitation are certain, the others as the
+# client shows them
 MIXES = """
 chaos -1 -1 0
+invitation 100 -1 0
 plus10 100 2000000 0
 plus11 45 4000000 25
 dinorant 70 250000 0
@@ -1454,8 +1477,9 @@ def chaos_machine(t):
     gm_move(a, 'Alice', 0, CHAOS_GOBLIN[1][0], CHAOS_GOBLIN[1][1] + 1)
     goblin = cid_of(npc_entry(a, CHAOS_GOBLIN[0]))
     p = talk(a, goblin)
-    check(p[3] == 3 and bytes(p[4:8]) == bytes([80, 75, 70, 60]),
-          'the chaos goblin opens the machine: C3 30 [3] 3, the invitation rates at 4: ' + p.hex(' '))
+    check(p[3] == 3 and bytes(p[4:8]) == bytes([100] * 4),
+          'the chaos goblin opens the machine: C3 30 [3] 3, the invitation rates at 4 (100, the test\'s): ' +
+          p.hex(' '))
     for box_slot, (slot, item) in enumerate(parts):
         p = move_between(a, 0, slot, item, 3, box_slot)
         check((p[3], p[4]) == (3, box_slot), 'into the box: 24 window 3 slot {}'.format(box_slot))
@@ -1469,7 +1493,8 @@ def chaos_machine(t):
     p = move_between(a, 3, 0, result, 0, parts[0][0])
     check((p[3], p[4]) == (0, parts[0][0]), 'A takes it out')
     a.send([0xC1, 0, 0x87])
-    chat_round_trip(a, 'Alice')
+    check(len(a.recv_until(key(0x87), what='closed')) == 3, 'the close button (87 with an empty box) gets 87 back, '
+          'the client closes the machine only then')
 
 
 def windows(t):
@@ -1677,6 +1702,356 @@ def social(t):
     t.a, t.b = a, b
 
 
+def cast_until_dead(conn, name, index, target, tries=40):
+    """conn's player casts the skill at list index on the player target until it dies (17), healing its mana now and
+    then. Returns the hits (15 damages) seen."""
+    hits = []
+    for i in range(tries):
+        if i % 4 == 0:
+            conn.send(chat(name, '/heal'))
+            notice(conn, 'healed')
+        conn.send([0xC1, 0, 0x19, index, target >> 8, target & 0xFF], encrypt=True)
+        conn.recv_until(lambda p: p.head == 0x19 and (p[6] << 8 | p[7]) & 0x7FFF == target, what='the cast')
+        hits += [damage(p) for p in conn.inbox if of(0x15, target)(p)]
+        conn.inbox = [p for p in conn.inbox if not of(0x15, target)(p)]
+        if any(of(0x17, target)(p) for p in conn.inbox):
+            return hits
+        time.sleep(ATTACK_PAUSE)
+    raise AssertionError('{} didn\'t kill {} in {} casts'.format(name, target, tries))
+
+
+def pk_level(conn, cid, level, what):
+    p = conn.recv_until(lambda p: key(0xF3, 0x08)(p) and (p[4] << 8 | p[5]) & 0x7FFF == cid, what=what)
+    check(len(p) == 7 and p[6] == level,
+          '{}: F3 08 with the cid at 4, level {} at 6: {}'.format(what, level, p.hex(' ')))
+
+
+def player_kills(t):
+    """Players hitting players outside town, self defense, the pk level, a murderer losing an item to a guard,
+    shops and parties refusing murderers."""
+    a, b = t.a, t.b
+    print('players hit players outside town, self defense')
+    for conn, name, spot in ((a, 'Alice', A_SPOT), (b, 'Bobby', B_SPOT)):
+        gm_move(conn, name, 0, *spot)
+        conn.send(chat(name, '/heal'))
+        notice(conn, 'healed')
+    a.recv_until(listed(0x12, b.cid), what='A sees B')
+    a.send(chat('Alice', '/skill 2'))
+    change, meteorite, number = skill_change(a)
+    check((change, number) == (0xFE, 2), 'A learns meteorite (2) at list index {}'.format(meteorite))
+    b.send([0xC1, 0, 0x15, a.cid >> 8, a.cid & 0xFF, 0x64, 0])
+    p = a.recv_until(of(0x15, a.cid), what='B hits A')
+    b.recv_until(of(0x15, a.cid), what='B sees his hit')
+    check(len(p) == 7, 'B hits A first (15 with her cid to both): {} damage'.format(damage(p)))
+    hits = cast_until_dead(a, 'Alice', meteorite, b.cid)
+    check(True, 'A kills B with meteorites: 17 after {}'.format(hits))
+    b.recv_until(of(0x17, b.cid), what='B dies')
+    chat_round_trip(a, 'Alice')
+    check(not any(key(0xF3, 0x08)(p) for p in a.inbox), 'self defense: no F3 08, A\'s pk level stays')
+
+    print('a kill makes a murderer')
+    b.recv_until(key(0xF3, 0x04), timeout=6, what='B respawns')
+    gm_move(b, 'Bobby', 0, *B_SPOT)
+    a.recv_until(listed(0x12, b.cid), what='A sees B again')
+    a.inbox.clear()
+    cast_until_dead(a, 'Alice', meteorite, b.cid)
+    pk_level(a, a.cid, 4, 'A, a murderer now')
+    pk_level(b, a.cid, 4, 'B sees it')
+    b.recv_until(key(0xF3, 0x04), timeout=6, what='B respawns')
+    gm_move(b, 'Bobby', 0, *B_SPOT)
+    check(logout(a, 1)[4] == 1, 'A goes to character select')
+    b.recv_until(listed(0x14, a.cid), what='B loses A')
+    b.inbox.clear()
+    info = enter(a, 'Alice')
+    check(info['pk'] == 4, 'A\'s pk level 4 in F3 03 [40] after the relog')
+    p = b.recv_until(listed(0x12, a.cid), what='B sees A back')
+    check(entry(p, a.cid)[30] & 0x0F == 4, 'B sees A\'s pk level in 12 [+30]')
+
+    print('a murderer: guards, items, shops, parties')
+    a.send(chat('Alice', '/pk 3'))
+    pk_level(a, a.cid, 6, 'A gets the worst level with /pk 3')
+    a_items = {s: i for s, i in info['inventory'].items()}
+    check(a_items, 'A carries {} items'.format(len(a_items)))
+    a.inbox.clear()
+    gm_move(a, 'Alice', 0, GUARD[1][0], GUARD[1][1] + 2)
+    guard = npc_entry(a, GUARD[0])
+    p = a.recv_until(of(0x18, cid_of(guard)), what='the guard attacks')
+    check(p[6] == 0x64, 'a guard in town attacks A: 18 with its cid')
+    a.recv_until(of(0x17, a.cid), what='A dies')
+    p = a.recv_until(key(0x28), what='item lost')
+    lost = a_items.get(p[3])
+    check(lost is not None, 'A dies and loses the item in slot {}: 28'.format(p[3]))
+    items_shown = collect_drops(a, 1, 'the lost item')
+    check(item_type(items_shown[0].get('item', b'\xFF\0\0\x80')) == item_type(lost),
+          'it lies on the ground where she died (20): ' + str(items_shown))
+    a.recv_until(key(0xF3, 0x04), timeout=6, what='A respawns')
+    gm_move(a, 'Alice', 0, AMY[1][0], AMY[1][1] + 2)
+    amy = cid_of(npc_entry(a, AMY[0]))
+    a.send([0xC1, 0, 0x30, amy >> 8, amy & 0xFF], encrypt=True)
+    p = a.recv_until(of(0x01, amy), what='Amy\'s answer')
+    check(text(p[5:]).startswith('I do not deal'), 'Amy sends the murderer away: 01 with her cid, ' + text(p[5:]))
+    chat_round_trip(a, 'Alice')
+    check(not any(p.head == 0x30 for p in a.inbox), 'no shop window')
+    gm_move(b, 'Bobby', 0, AMY[1][0] + 2, AMY[1][1] + 2)
+    a.recv_until(listed(0x12, b.cid), what='A sees B in town')
+    a.send([0xC1, 0, 0x40, b.cid >> 8, b.cid & 0xFF], encrypt=True)
+    check(a.recv_until(key(0x41), what='party refused')[3] == 0, 'nobody parties with a murderer: 41 0')
+    a.send(chat('Alice', '/pk 0'))
+    pk_level(a, a.cid, 3, 'A is a commoner again with /pk 0')
+
+
+def quests(t):
+    """Sevina's quests: states, the window, zen and items taken, the rewards and the class change."""
+    a, b, db_path = t.a, t.b, t.db_path
+    print('Sevina\'s first quest')
+    near_sevina = (SEVINA[1][0], SEVINA[1][1] + 2)
+    gm_move(a, 'Alice', 0, SEVINA[1][0] + 2, SEVINA[1][1] + 2)
+    gm_move(b, 'Bobby', 0, *near_sevina)
+    b.send(chat('Bobby', '/level 150'))
+    points = struct.unpack('<H', bytes(b.recv_until(key(0xF3, 0x05), what='level 150')[6:8]))[0]
+    b.recv_until(key(0x0D), what='level notice')
+    b.send([0xC1, 0, 0xA0], encrypt=True)
+    p = b.recv_until(key(0xA0), what='quest states')
+    check(p[3] == 50 and len(p) == 54 and set(p[4:]) == {0xFF}, 'A0: 50 state bytes from [4], every quest not '
+          'started (3): ' + p.hex(' ')[:24])
+    b.send(chat('Bobby', '/zen 1500000'))
+    notice(b, '1500000 zen')
+    sevina = cid_of(npc_entry(b, SEVINA[0]))
+    b.inbox.clear()
+
+    def talk_sevina():
+        b.send([0xC1, 0, 0x30, sevina >> 8, sevina & 0xFF], encrypt=True)
+        return b.recv_until(key(0xA1), what='the quest window')
+
+    def proceed(quest):
+        b.send([0xC1, 0, 0xA2, quest, 1], encrypt=True)
+        return b.recv_until(lambda p: p.head in (0xA1, 0xA2), what='the answer to A2')
+
+    p = talk_sevina()
+    check(len(p) == 5 and (p[3], p[4]) == (0, 0xFF), 'talking to her opens the window on quest 0: A1 0 FF')
+    p = proceed(0)
+    check(len(p) == 6 and (p[3], p[4], p[5]) == (0, 0, 0xFD), 'A2 accepts it: A2 0 0 with state 1 in bits 0..1')
+    money = b.recv_until(key(0x22), what='money')
+    check(money[3] == 0xFE and be32(money[4:8]) == 500000, 'and takes 1 000 000 zen: 22 FE 500000')
+    slot, scroll = give(b, 'Bobby', 14, 23)
+    p = proceed(0)
+    check((p[3], p[5]) == (0, 0xFE), 'the scroll of the emperor finishes it: A2 with state 2')
+    check(b.recv_until(key(0x28), what='scroll taken')[3] == slot, 'the scroll is taken: 28 with its slot')
+    p = b.recv_until(key(0xA3), what='reward')
+    check(len(p) == 7 and cid_of(p[3:5]) == b.cid and (p[5], p[6]) == (0xC8, 10),
+          'A3 with his cid: C8, 10 level up points')
+
+    print('the second quest and the class change')
+    p = talk_sevina()
+    check((p[3], p[4]) == (1, 0xFE), 'now she talks about quest 1: A1 1 FE')
+    p = proceed(1)
+    check(p.head == 0xA1 and p[3] == 1, 'without 2 000 000 zen it is refused, the window again: A1 1')
+    b.send(chat('Bobby', '/zen 2000000'))
+    notice(b, '2000000 zen')
+    talk_sevina()
+    p = proceed(1)
+    check(p.head == 0xA2 and (p[3], p[5]) == (1, 0xF6), 'accepted with the zen: A2 1 with state 1 in bits 2..3')
+    give(b, 'Bobby', 14, 24)
+    p = proceed(1)
+    check((p[3], p[5]) == (1, 0xFA), 'the broken sword finishes it: state 2 in bits 2..3')
+    check(b.recv_until(key(0xA3), what='points')[5:7] == bytes([0xC8, 10]), 'A3 C8 10 level up points')
+    p = b.recv_until(key(0xA3), what='class')
+    check((p[5], p[6]) == (0xC9, 48), 'A3 C9 48: Bobby is a blade knight')
+    p = a.recv_until(lambda p: p.head == 0xA3 and p[5] == 0xC9, what='A sees it')
+    check(cid_of(p[3:5]) == b.cid, 'A sees his class change: A3 C9 with his cid')
+    p = b.recv_until(key(0xA0), what='states again')
+    check(p[4] == 0xFA, 'A0 again for the quest class, quests 0 and 1 done')
+    chat_round_trip(b, 'Bobby')  # the save comes after the packets
+    with sqlite3.connect(db_path) as db:
+        row = db.execute('SELECT class, quest_state FROM characters WHERE name = ?', ('Bobby',)).fetchone()
+    check(row[0] == 48 and bytes(row[1])[:1] == b'\xFA', 'saved: class 48, quest state FA')
+    check(logout(b, 1)[4] == 1, 'B goes to character select')
+    a.recv_until(listed(0x14, b.cid), what='A loses B')
+    a.inbox.clear()
+    check(char_list(b)[0][15] == 48, 'the char list shows the blade knight (class byte 48)')
+    info = enter(b, 'Bobby')
+    check(info['points'] == points + 20, 'his level up points: {} + 20'.format(points))
+    p = b.recv_until(key(0xA0), what='quest states on entering')
+    check(p[4] == 0xFA, 'A0 when entering the game')
+    p = a.recv_until(listed(0x12, b.cid), what='A sees B back')
+    check(entry(p, b.cid)[4] == 48, 'A sees a blade knight: 12 [+4] 48')
+    p = talk_sevina()
+    check((p[3], p[4]) == (1, 0xFA), 'Sevina talks to the blade knight about quest 1, done: A1 1 FA')
+
+
+def guild_entries(p):
+    """(number, name, mark) of a 5A: C2, [4] count, 42 bytes each from [5]."""
+    check(p[0] == 0xC2 and len(p) == 5 + 42 * p[4], '5A is C2, 42 bytes per guild: ' + p.hex(' ')[:40])
+    return [(p[5 + i * 42] << 8 | p[6 + i * 42], text(p[7 + i * 42:15 + i * 42]), bytes(p[15 + i * 42:47 + i * 42]))
+            for i in range(p[4])]
+
+
+def guild_members(p):
+    """cid -> guild number of a 5B: C2, [4] count, 4 bytes each from [5]."""
+    check(p[0] == 0xC2 and len(p) == 5 + 4 * p[4], '5B is C2, 4 bytes per player: ' + p.hex(' '))
+    return {cid_of(p[5 + i * 4:7 + i * 4]): p[7 + i * 4] << 8 | p[8 + i * 4] for i in range(p[4])}
+
+
+def in_5b(cid):
+    """A 5B with an entry for cid."""
+    def pred(p):
+        return p.head == 0x5B and any(cid_of(p[5 + i * 4:7 + i * 4]) == cid for i in range(p[4]))
+    return pred
+
+
+def guilds(t):
+    """A guild: created at the guild master with a name and a mark, a member joins and is seen, the member list,
+    guild chat, leaving with the personal code, the master disbanding it."""
+    a, b, db_path = t.a, t.b, t.db_path
+    print('A creates a guild at the guild master')
+    gm_move(a, 'Alice', 0, GUILD_MASTER[1][0], GUILD_MASTER[1][1] + 2)
+    master = cid_of(npc_entry(a, GUILD_MASTER[0]))
+    a.send([0xC1, 0, 0x30, master >> 8, master & 0xFF], encrypt=True)
+    p = a.recv_until(of(0x01, master), what='not yet')
+    check(text(p[5:]).startswith('Come back at level 100'), 'at level 10 the guild master sends her away: ' +
+          text(p[5:]))
+    a.send(chat('Alice', '/level 100'))
+    notice(a, 'level 100')
+    a.send([0xC1, 0, 0x30, master >> 8, master & 0xFF], encrypt=True)
+    p = a.recv_until(key(0x54), what='guild master window')
+    check(len(p) == 3, 'at level 100 his window opens: 54')
+    a.send([0xC1, 0, 0x54, 1])
+    check(len(a.recv_until(key(0x55), what='mark editor')) == 3, 'yes, she wants to be a guild master: 55')
+    mark = bytes(range(0x10, 0x30))
+    a.send([0xC1, 0, 0x55, *b'Mag\0\0\0\0\0', *mark])
+    check(a.recv_until(key(0x56), what='too short')[3] == 2, 'a name of 3 letters is too short: 56 2')
+    a.send([0xC1, 0, 0x55, *b'Mages\0\0\0', *mark])
+    check(a.recv_until(key(0x56), what='created')[3] == 1, 'the guild Mages is created: 56 1')
+    p = a.recv_until(key(0x5A), what='guild info')
+    (number, name, shown_mark), = guild_entries(p)
+    check(name == 'Mages' and shown_mark == mark, 'A gets the guild with its number {}, name and mark: 5A'.format(
+        number))
+    check(guild_members(a.recv_until(in_5b(a.cid), what='her guild')) == {a.cid: number}, 'and her place in it: 5B')
+
+    print('B joins')
+    gm_move(b, 'Bobby', 0, GUILD_MASTER[1][0] + 1, GUILD_MASTER[1][1] + 2)
+    b.recv_until(listed(0x12, a.cid), what='B sees A')
+    check(guild_entries(b.recv_until(key(0x5A), what='A\'s guild'))[0][:2] == (number, 'Mages')
+          and guild_members(b.recv_until(in_5b(a.cid), what='A in it')) == {a.cid: number},
+          'B sees A with her guild: 5A, then 5B')
+    b.send([0xC1, 0, 0x50, a.cid >> 8, a.cid & 0xFF])
+    p = a.recv_until(key(0x50), what='join request')
+    check(len(p) == 5 and cid_of(p[3:5]) == b.cid, 'A is asked: 50 with his cid')
+    a.send([0xC1, 0, 0x51, 1, b.cid >> 8, b.cid & 0xFF])
+    check(b.recv_until(key(0x51), what='joined')[3] == 1, 'she says yes, B is in: 51 1')
+    for conn in (a, b):
+        check(guild_members(conn.recv_until(in_5b(b.cid), what='B in the guild')) == {b.cid: number},
+              '{} sees B in the guild: 5B'.format(conn.name))
+    b.send([0xC1, 0, 0x52])
+    p = b.recv_until(key(0x52), what='member list')
+    members = [(text(p[16 + i * 12:26 + i * 12]), p[27 + i * 12]) for i in range(p[5])]
+    check(p[0] == 0xC2 and len(p) == 16 + 12 * p[5] and members == [('Alice', 0x80), ('Bobby', 0x80)],
+          'the guild window: 52 with the master first, 12 bytes from [16], both in game: {}'.format(members))
+    b.send(chat('Bobby', '@hello guild'))
+    for conn in (a, b):
+        p = conn.recv_until(lambda p: p.head == 0x00 and text(p[13:]) == '@hello guild', what='guild chat')
+        check(text(p[3:13]) == 'Bobby', '{} gets the guild line with its @'.format(conn.name))
+    with sqlite3.connect(db_path) as db:
+        rows = db.execute('SELECT g.name, c.name, m.status FROM guild_members m JOIN guilds g ON g.id = m.guild_id '
+                          'JOIN characters c ON c.id = m.character_id ORDER BY m.status DESC').fetchall()
+    check(rows == [('Mages', 'Alice', 0x80), ('Mages', 'Bobby', 0)], 'stored: {}'.format(rows))
+
+    print('B comes back, leaves, A disbands the guild')
+    check(logout(b, 1)[4] == 1, 'B goes to character select')
+    enter(b, 'Bobby')
+    check(guild_entries(b.recv_until(key(0x5A), what='own guild'))[0][:2] == (number, 'Mages')
+          and guild_members(b.recv_until(in_5b(b.cid), what='own place')) == {b.cid: number},
+          'entering, B gets his guild (5A) and his place (5B)')
+    b.send([0xC1, 0, 0x53, *name10('Bobby'), *name10('0000')])
+    check(b.recv_until(key(0x53), what='wrong code')[3] == 0, 'leaving with a wrong personal code: 53 0')
+    b.send([0xC1, 0, 0x53, *name10('Bobby'), *name10(PERSONAL_CODE)])
+    check(b.recv_until(key(0x53), what='left')[3] == 1, 'with his code B leaves: 53 1')
+    for conn in (a, b):
+        p = conn.recv_until(of(0x5D, b.cid), what='B without a guild')
+        check(len(p) == 5, '{} sees B without a guild: 5D with his cid'.format(conn.name))
+    a.send([0xC1, 0, 0x53, *name10('Alice'), *name10(PERSONAL_CODE)])
+    check(a.recv_until(key(0x53), what='disbanded')[3] == 4, 'the master leaving disbands the guild: 53 4')
+    b.recv_until(of(0x5D, a.cid), what='A without a guild')
+    with sqlite3.connect(db_path) as db:
+        check(db.execute('SELECT COUNT(*) FROM guilds').fetchone()[0] == 0, 'the guild is gone from the database')
+    t.b = b
+
+
+def devil_square(t):
+    """The invitation mix, Charon before and during the entry, a square by level and invitation, a kill's points,
+    the ranking with its rewards, back to Noria."""
+    b = t.b
+    print('the chaos machine makes a Devil\'s invitation')
+    b.send(chat('Bobby', '/zen 100000'))
+    notice(b, '100000 zen')
+    parts = [give(b, 'Bobby', 14, 17, 2), give(b, 'Bobby', 14, 18, 2), give(b, 'Bobby', 12, 15)]
+    gm_move(b, 'Bobby', 0, CHAOS_GOBLIN[1][0], CHAOS_GOBLIN[1][1] + 1)
+    talk(b, cid_of(npc_entry(b, CHAOS_GOBLIN[0])))
+    for box_slot, (slot, item) in enumerate(parts[:2]):
+        move_between(b, 0, slot, item, 3, box_slot)
+    b.send([0xC1, 0, 0x86])
+    check(b.recv_until(key(0x86), what='no mix')[3] == 0, 'an eye and a key alone make nothing: 86 0 (failed)')
+    kind, box = item_list(b.recv_until(key(0x31), what='the box'))
+    check(kind == 3 and box == {0: parts[0][1], 1: parts[1][1]},
+          'and the box as it is (31 kind 3), so the client can take them out and close the machine')
+    move_between(b, 0, parts[2][0], parts[2][1], 3, 2)
+    b.send([0xC1, 0, 0x86])
+    p = b.recv_until(key(0x22), what='mix zen')
+    check(p[3] == 0xFE and be32(p[4:8]) == 90000, 'a +2 eye and key take 10 000 zen: 22 FE')
+    p = b.recv_until(key(0x86), what='mix result')
+    invitation = bytes(p[4:8])
+    check(p[3] == 1 and item_type(invitation) == 14 * 32 + 19 and invitation[1] >> 3 & 0x0F == 2,
+          'with a jewel of chaos: a +2 Devil\'s invitation, 86 1: ' + p.hex(' '))
+    move_between(b, 3, 0, invitation, 0, parts[0][0])
+    b.send([0xC1, 0, 0x87])
+    b.recv_until(key(0x87), what='closed')
+    slot = parts[0][0]
+
+    print('Charon')
+    gm_move(b, 'Bobby', 0, CHARON[1][0], CHARON[1][1] + 2)
+    charon = cid_of(npc_entry(b, CHARON[0]))
+    b.send([0xC1, 0, 0x30, charon >> 8, charon & 0xFF], encrypt=True)
+    p = b.recv_until(key(0x91), what='not yet')
+    check(len(p) == 4 and p[3] == 255, 'without rounds in the test config he says 255 minutes: 91 [3]')
+    b.send(chat('Bobby', '/ds'))
+    notice(b, 'Devil Square is open')
+    check(b.recv_until(key(0x92), what='countdown')[3] == 1, 'the entry closes in 30 s (the test\'s 2): 92 1')
+    p = talk(b, charon)
+    check(p[3] == 4, 'Charon\'s window: C3 30 [3] 4')
+    b.send([0xC1, 0, 0x90, 0, slot + 12])
+    check(b.recv_until(key(0x90), what='too strong')[3] == 3, 'level 150 in the first square (10..99): 90 3')
+    b.send([0xC1, 0, 0x31], encrypt=True)  # the client closes the window
+    talk(b, charon)
+    b.send([0xC1, 0, 0x90, 1, slot + 12])
+    check(b.recv_until(key(0x28), what='invitation taken')[3] == slot, 'the second square takes the invitation: 28')
+    check(b.recv_until(key(0x90), what='entered')[3] == 0, '90 0')
+    p = b.recv_until(key(0x1C), what='to Devil Square')
+    check(p[4] == 9 and p[5] in range(135, 143) and p[6] in range(162, 171), 'B is in Devil Square, at gate 59: ' +
+          p.hex(' '))
+    gm_move(b, 'Bobby', 9, DS_DRAGON[0] - 1, DS_DRAGON[1])
+
+    print('a round')
+    dragon, _ = meet(b, 2)[0]
+    check(True, 'the round starts, the square\'s dragon comes out')
+    for i in range(10):
+        b.send([0xC1, 0, 0x15, dragon >> 8, dragon & 0xFF, 0x64, 0])
+        p = b.recv_until(lambda p: p.head in (0x15, 0x16) and (p[3] << 8 | p[4]) & 0x7FFF == dragon, what='hit')
+        if p.head == 0x16:
+            break
+        time.sleep(ATTACK_PAUSE)
+    check(p.head == 0x16, 'B kills it')
+    check(b.recv_until(key(0x92), timeout=8, what='end countdown')[3] == 2, 'the round ends in 30 s: 92 2')
+    p = b.recv_until(key(0x93), timeout=8, what='ranking')
+    rows = [(text(p[5 + i * 24:15 + i * 24]), *struct.unpack('<3I', bytes(p[17 + i * 24:29 + i * 24])))
+            for i in range(p[4])]
+    check(len(p) == 5 + 24 * p[4] and p[3] == 1 and rows == [('Bobby', 4, 8000, 40000)] * 2,
+          'the ranking: 93, rank 1 at [3], his own entry first, then the ranks: 24 bytes each, the dragon\'s level '
+          'in points, 8000 exp and 40000 zen of the second square\'s first rank: {}'.format(rows))
+    p = b.recv_until(key(0xF3, 0x04), timeout=5, what='back to Noria')
+    check(p[6] == 3 and le32(p[16:20]) == 90000 + 40000, 'then back to Noria with the zen (F3 04): ' +
+          p.hex(' '))
+
+
 def play(servers, db_path):
     """The test, area by area. t carries the clients and what one area leaves for the next."""
     t = SimpleNamespace(servers=servers, db_path=db_path)
@@ -1696,6 +2071,10 @@ def play(servers, db_path):
     chaos_machine(t)
     windows(t)
     social(t)
+    player_kills(t)
+    quests(t)
+    guilds(t)
+    devil_square(t)
 
 def port_open(port):
     try:

@@ -1,0 +1,281 @@
+# Bots
+
+AI players: ordinary accounts and characters that start at level 1, play through the same rules as clients and grow
+by a career plan. The milestones (B0..B3) are planned here, their status is in the table of `docs/roadmap.md`. As
+there: one milestone per session, each ends with its tests passing, a look in the real client and its "Done" notes
+here.
+
+## Design
+
+- In process, no socket: a `BotSession` is a connection the game can't tell from a client. `view.py` shows every
+  non monster connection as a player, so real clients see bots with no extra packets. Chat, whispers and parties
+  already go through `game.playing()`, so bots get them like clients do.
+- Input: the bot builds client packets (`CMove`, `CAttack`, `CJoinGame`, ...) and dispatches them through the
+  game's handlers like `protocol.py` does, as bytes through `factory`, so a bot's packet is parsed like one from the
+  wire. Bots can do nothing a client can't, every server check applies to them.
+- Output: `write()` hands the built server packets to the brain. `Packet` keeps its values as attributes, so they are
+  typed events (`SDamage`, `SKill`, `SLevelUp`, later trade and party requests) without parsing.
+- Perception: the bot's own `Player` (the client knows all of it), the objects in `c.view` (what a client standing
+  there has been shown: positions, types, dead or not) and the static data files (game knowledge). Never a
+  monster's life, target or path, nothing out of view, nobody else's inventory.
+- Brain in three layers:
+  - career: hunting grounds derived from data, not hand written. `Monster.txt` levels and `MonsterSetBase.txt`
+    spawns grouped by map and area; pick the one near the bot's level. Map progression from the `Gate.bmd` graph
+    (entrance -> target, minimum level, MG 2/3). Stat build per class as point ratios. Personality: risk, greed,
+    chattiness, play schedule (log in and out in sessions, progress only while online).
+  - activity: small state machines (travel, hunt, loot, rest, restock / sell, trade, idle in town) with timeouts,
+    picked by priority every few seconds: survive > restock > sell / repair > upgrade > level.
+  - motor: walks in segments at the client's pace, `path.find_path` for short paths, flow fields for long ones,
+    attacks and casts at the pace the server checks, skill choice by mana and range.
+- Driven by the game tick, each bot thinks every 0.5..1 s, staggered. No timers of its own.
+- Storage: a migration with `bots (character_id, personality, career state as JSON, rng seed, schedule)`. Bot
+  characters are ordinary `characters` rows saved by `GameServer.save`. `bin/account.py` creates bots.
+- Bots get items and zen only from the drops, shops and kills players get, nothing out of thin air.
+- Players can tell a bot when they ask or trade with it.
+
+Where the code stood when this was planned (M6 done, M7 in progress):
+- `GameServer.now` is `loop.time()`, the loop is used for nothing else but `start()`. With a fake clock and players
+  standing outside Lorencia the data loads in 0.12 s and 10 game minutes take 0.08 s with 1 player (~7700 times real
+  time), 0.5 s with 10 (~1200 times), 1.5 s with 40 (~400 times). The world needs no change to run faster than real
+  time, the bots' thinking will be the cost.
+- Not repeatable: `Monster`, `GroundItem` and the connections hash by `id()`, so the order of the sets in `ai.tick`,
+  `Grid.near`, `find_target` and `dead_monsters` changes from run to run and the `random` draws land on different
+  monsters. Measured, see [S0](#s0-fast-tests-and-replay).
+- The game state of a connection (`window`, `trade`, `party`, `summon`, `area_casts`, `self_defense`, ...) is set in
+  `BaseProtocol.__init__`; a connection without it breaks the tick. Handlers are registered in `bin/gs.py`, a
+  simulation can't import them. `BaseProtocol.send_all`, `send_same_map` and `send_near` are unused.
+- The server checks reach (3 tiles, bows 8), the attack pace (0.4 s / (1 + speed / 100), bursts of 4), skill mana,
+  distance (+ 2) and pace, pick up within 3 tiles: mup's numbers, the client's own timing is a guess (M4). Walks are
+  not paced: the position jumps to the walk's end, a walk may start up to 15 tiles from it.
+- New characters have no items, wizards know energy ball, elves start in Noria. Gates: Lorencia -> Noria level 10,
+  Devias 15, Dungeon 20; Noria -> Lorencia 10.
+
+## Fast tests and replay
+
+Bot behaviour is written and checked in game time, many times faster than real time; any run can be repeated, and a
+bot's situation can be saved and played again as a test. S0 builds it without bots, B0 adds them, every B milestone
+uses it.
+
+- Clock: `GameServer` reads `now` (and a wall time for schedules) from a clock, `loop.time` by default. A
+  simulation's clock moves only when it ticks.
+- Same seed, same game: the simulation seeds `random`, each bot has its own `random.Random(seed)` so bot changes don't
+  shift the world's draws, sets iterate in a repeatable order (hash by cid / id), no wall clock in game logic. A test
+  runs the same seed twice and compares the trace digests.
+- `mup/sim.py`: `Sim(seed, config overrides)` is the game with an in-memory database, the manual clock and the
+  handlers, with `step()`, `run(seconds)`, `run_until(pred, limit)`; log lines carry the game time. `Puppet` is a
+  session for test code: it sends client packets and waits for server packets like `tests/client.py`'s `Conn`, in
+  game time. Tests are set up through the GM command functions (`command.level`, `item`, `move`).
+- `tests/sim.py`: coded scenarios and the scenario files in `tests/scenarios/`, each running until its check holds or
+  a game time limit. A plain script like `tests/client.py`, non zero exit on the first failure, seconds for all of
+  it. Behaviour tests use small monster, spawn and drop files like `tests/client.py`; career tests use the real data.
+- `bin/sim.py`: long runs and their report (`--bots dk,dw,elf,mg --hours 6 --seed 7 --exp-rate 1`); `--trace FILE`
+  (JSONL: game time, bot, activity, event, position, life, target), `--packets BOT` (that bot's packets like
+  `log_packets`), `--until T`, `--dump T BOT FILE`, `--grounds CLASS` (the hunting grounds the career picks by level).
+- Scenario file (`--dump`): the bot's character (class, level, stats, life, mana, map, position, inventory, skills),
+  its `bots` row, the monsters in its view (type, position, life), the seed and the game time. Loading one puts those
+  monsters where they were instead of a random spawn spot. Activities aren't saved: the brain picks again by
+  priority, as after a relog.
+- Debugging loop: the report flags a stuck bot, `--trace` around that time shows why, `--dump` a minute earlier makes
+  a scenario that fails, the fix makes it pass, the scenario stays as a test. A whole run is replayed by its seed:
+  getting to the hour of the problem takes seconds.
+- Fair play checker on what bots send, for what the server doesn't check: a walk starts on the bot's tile, has at
+  most 15 steps, doesn't start before the last one ended at the client's pace; one `22` / `26` at a time, nothing
+  while item use is locked. Every server refusal of a bot's request (`22` failed, `24` refused, a swing or cast out of
+  pace or reach) is counted too: it means the bot's idea of the rules is wrong. Errors in `tests/sim.py`, counts in
+  the report.
+
+## S0 fast tests and replay
+
+What B0 needs before the first bot: the game in process on a game clock, the same game from the same seed, clients in
+process (puppets) for tests, a player's situation saved and loaded. None of it needs bots.
+
+Done when: `tests/client.py` passes unchanged; `tests/sim.py` passes in a few seconds; the same seed gives the same
+digest under different `PYTHONHASHSEED`s; `bin/sim.py` runs 8 hunters for 6 game hours in under a minute, and a
+hunter dumped at a game time plays on from its file.
+
+Spike (a scratch script, not kept; M7 in the working tree): `create_gs` from `bin/gs.py` with a fake clock and an
+in-memory database, puppets (`BaseProtocol` on a fake transport) hunting outside the east exit of Lorencia through
+the real handlers for 30 game minutes, a sha256 of every byte written to them:
+- As the code is, the same seed is a different game every run: 5 runs, 5 digests, 3 different sets of levels.
+  Monsters, ground items and connections hash by address, sets of them iterate in another order and the `random`
+  draws go elsewhere.
+- With `Monster` hashed by cid, `GroundItem` by id, the connections by cid and Devil Square's schedule on a wall clock
+  derived from the game clock: 5 runs under `PYTHONHASHSEED` 1..5, one digest; another seed, another digest. Every
+  draw already goes through `random` (functions take `rng=random`), seeding it is enough.
+- Speed: 30 game minutes in 0.3 s with 1 puppet (~6300 times real time), 1.3 s with 8 (~1400 times), 74 s with 40 on
+  one spot (24 times). In the profile the puppets' own A* (budget 400 every 0.4 s, mostly towards monsters they
+  couldn't reach) took 17 of the 25 s, the monsters' AI 2.3 s. Pathing is what bots have to keep cheap.
+- A new account costs 25 ms (`hash_password`, scrypt). `tests/client.py` takes 68 s, 2 s of it CPU: the rest is
+  waiting for game time.
+
+Steps (each leaves something that runs and is tested; after 4 is a stopping point if the session runs out):
+
+1. Sessions and dispatch, no behaviour change:
+   - `mup/server/session.py`: `Session` with what the game keeps on a connection (everything `BaseProtocol.__init__`
+     sets but the buffer and the crypto), `write`, `disconnect`, `tag`, hash by cid. `BaseProtocol(Protocol,
+     Session)` keeps framing, crypto and the packet log. The game never touches the transport (only the connect
+     server's `server_info` handler disconnects).
+   - `ServerBase.dispatch(c, packet)` out of `BaseProtocol.packet_received`: factory, handlers, the exception log.
+   - Handler registration out of `bin/gs.py:create_gs` into `mup/server/handlers.py` (`register(gs)`).
+   - The unused `send_all`, `send_same_map`, `send_near` go. Handler type hints to `Session` (mechanical, may wait).
+2. Clock: `GameServer(loop, config, clock=None)`. A clock gives `now()` (game seconds, `loop.time` in the server) and
+   `wall()` (epoch seconds, `time.time`). Devil Square's schedule and the trade log's time read the game's wall time;
+   a simulation's is a fixed date plus the game time. The ping handler keeps the real time, puppets don't ping.
+3. Repeatable order: `Monster` hashes by cid, `GroundItem` by `0x10000 + id` (ground ids 0..999 are monster cids
+   too), `Session` by cid, `Party` by a number from a counter on the game, with a comment why. Nothing else the tick
+   iterates hashes by address (`dead_monsters`, `affected`, `parties`, grid cells, `c.view`; the other sets hold
+   ints).
+4. Accounts without a password: `AccountRepository.create(name, None)` stores `!`, which `check_password` already
+   refuses. No scrypt, nobody logs in with it. Puppets now, bots in B0.
+5. `mup/sim.py`:
+   - `Sim(seed=0, **config)`: seeds `random`, `Config(db_path=':memory:', ...)` with the overrides (test monster,
+     spawn and drop files), the game with `handlers.register` and a manual clock. `step()` (one tick),
+     `run(seconds)`, `run_until(pred, limit)` (game seconds; past the limit an `AssertionError` with the last
+     packets, like `Conn.recv_until`). Log lines carry the game time (a logging filter).
+   - `Puppet(Session)`: a client in process. `send(packet)` dispatches a built client packet as bytes through
+     `factory`, like the wire; what the game writes lands in `inbox` as typed packets; `recv_until(pred, limit)` runs
+     the game until one matches. Builders for what `tests/client.py` packs by hand (`CMove` from steps).
+   - `Sim.enter(name, class, map, x, y, level=1)`: a character on an account without password, in game through
+     `CJoinGame`. Level, items, zen and places through the GM command functions (`command.level`, `item`, `zen`,
+     `move`, `heal`), so a test is set up the way a GM would.
+   - `Hunter`: a puppet that hunts (the spike's: the nearest monster in view, a short A* towards it, a swing every
+     0.4 s), the stand-in for bots until B0. `Sim.digest()`: sha256 of everything written to the puppets in order.
+6. Scenarios: `Sim.dump(c, path)` writes JSON: the character as stored (row, items, skills), the monsters within view
+   range (type, cid, position, home, life), the seed and the game time. `Sim.load(path)` makes a game with that
+   seed, puts those monsters there (a `monster.place` next to `spawn`) and the character in game. AI targets and
+   paths aren't kept, monsters look around again. B0 adds the bot's row.
+7. `tests/sim.py`, a plain script like `tests/client.py` that stops at the first failure:
+   - repeatable: hunters twice with one seed give one digest, another seed another;
+   - game time instead of waiting, with test monsters: killed by the hound and back in town 3 s later, a spider back
+     after its regen time, a drop only the killer's for 10 s and gone after 60 s, regeneration, a Devil Square round
+     started through `command.devil_square_now` up to its ranking;
+   - a dumped scenario loads and plays on.
+
+   Checks read packet attributes, the raw offsets stay `tests/client.py`'s job.
+8. `bin/sim.py`: `--players N --hours H --seed S --exp-rate R` with hunters and a report (levels, kills, deaths,
+   packets, game minutes per second), `--until T --dump NAME FILE`, `--load FILE`, `--digest`, `--profile` (the
+   slowest functions). B0 puts bots in the hunters' place and adds the trace, the fair play checker and the bot
+   report.
+
+Maybe later: `tests/client.py`'s server on a faster clock (a config factor) to cut its 66 s of waiting.
+
+## B0 bots: session, hunting, levelling
+
+The session, hunting from data, levelling with the class build, on top of S0.
+
+Done when: the test's client sees a bot appear, walk, attack and kill; the simulation takes bots of all four
+classes a few levels up without getting stuck; the real client watches a bot hunt outside Lorencia.
+
+Steps (each leaves something that runs and is tested; after 3 is a stopping point if the session runs out):
+
+0. Capture, in the real client with `log_packets = yes`: walk long straight lines, hold the attack on a monster with a
+   knight, cast energy ball over and over with a wizard, drink potions back to back, go through the Noria gate. From
+   the log: ms per tile, the attack and cast intervals and the `0E` speeds, the potion interval, the time from `1C` to
+   `F3 12`. Into `mup/bot/motor.py` and the doc, marked traffic; it also checks M4's pace guess. Until then the
+   server's own pace and a placeholder walk speed.
+1. Storage: a migration for `bots`, `mup/repository/bot.py`. `bin/account.py bot create NAME CLASS [--seed N]`,
+   `bots`, `bot delete NAME`: an account without password (S0), its character through `character.new_character` at
+   the class's start gate. `[bots] enabled = no` in `config.ini`.
+2. `mup/bot/session.py` and `mup/bot/manager.py`: `BotSession`, a S0 puppet driven by a brain: its cid from
+   `add_connection`, `acc` set, `CJoinGame` dispatched; its packets also in the packet log under its cid when
+   `log_packets` is on. `BotManager`, called from the tick: the motor every tick, the brain every 0.5..1 s staggered,
+   logins at start (the schedule later), bot state saved with the character. Test: a puppet gets `12` when a bot
+   logs in, `14` when it logs out.
+3. Motor (`mup/bot/motor.py`): `CMove` segments of at most 8 steps, the next when the last ended at the client's pace;
+   `find_path` for short paths, per map flow fields for long ones (distance from a target area over the walkable
+   tiles, about 65 000 per map, cached per map and target: gates, towns, hunting grounds; the bot walks downhill).
+   Facing, swings at the server's pace, `19` casts with the client's mana and distance checks. Gates: walk into the
+   entrance area, `1C`, `F3 12` after the answer. Test: from Lorencia to the Noria gate, refused at level 1, through
+   at level 10, no checker errors.
+4. Career (`mup/bot/career.py`): spawns laid on 16 x 16 tile cells per map (area spawns spread over their walkable
+   tiles, single ones on their spot), counted by monster level. A cell's score for a bot: monsters in its level band
+   and their density, minus danger (their damage against the bot's defense and life, `stats.py` values), travel (flow
+   field distance) and the players already there; only maps the gate graph reaches at the bot's level. Class builds
+   as point ratios spent with `F3 06` (mup's choice, e.g. knights strength / agility / vitality). `bin/sim.py
+   --grounds` prints the picks. Tests: a level 1 knight hunts near Lorencia, a level 1 elf in Noria.
+5. Brain (`mup/bot/brain.py`, `mup/bot/activity.py`): activities with timeouts, picked by priority (survive > spend
+   points > level):
+   - travel to a place, on the map or through gates;
+   - hunt: a monster in view, in the band and reachable; approach, swing or cast until its `17`; a target it fails to
+     reach a few times is left alone for a while;
+   - rest: below the personality's life threshold, away from monsters or in the safe zone until regenerated;
+   - dead: wait for `F3 04`, then travel back;
+   - spend points.
+
+   Trace events for every pick and its outcome, a stuck watchdog (no exp and no movement for N game minutes).
+   Scenarios with the test monsters: kills a spider, rests at low life, dies to the hound and comes back, gives up on
+   an unreachable monster, spends points on a level up, a wizard casting until out of mana.
+6. `bin/sim.py` with bots instead of hunters, the report (level per hour per class, kills, deaths, time per
+   activity, stuck count, checker errors and refusals), the trace, the bot row in dumps, the fair play checker. Tune
+   until the four classes gain a few levels on several seeds without stuck flags.
+7. Done check: the last server start of `tests/client.py` enables bots with one made by `bin/account.py bot create`;
+   the client sees its `12`, a `10` walk, an `18` swing and the `17` of a monster it killed. Then the real client
+   watches a bot hunt outside Lorencia.
+
+## B1 bots: items, skills, map progression
+
+Without town trips: selling, buying and repair come in B1b.
+
+Done when: a bot left alone (a knight, wizard or gladiator; elves start in Noria) goes from Lorencia to the next map's
+hunting ground with better gear than it started with: same seeds in the simulation, then once in the real client.
+
+Steps:
+
+1. Gear (`mup/bot/gear.py`): the inventory is the bot's own `Player.inventory`, kept in step by the answers (`22`,
+   `24`, `28`, `2A`). Wearable by `inventory.can_wear` and the requirements (what the client shows red). A piece's
+   worth: the damage, defense and speeds `stats.py` gives with it worn against without it (the client's formulas,
+   what its character window shows); an item at 0 durability gives nothing.
+2. Loot: after a kill, the drops in view (`20`): zen, potions, upgrades, items the build will soon wear, scrolls and
+   orbs the class can learn, jewels. Walk within 1.5 tiles, one `22` at a time until its answer; an item refused in
+   its owner time is tried once more after it. Nothing to sell yet: with the grid full the least worth is dropped,
+   never what is worn. Test: a spider with fixed drops (sword, potion, zen) is picked clean.
+3. Potions: `26` below the personality's life threshold, then wait for the unlock and the potion interval (step 0 of
+   B0); mana potions for wizards. Potions don't stack yet (M5), each takes a slot; keep a few, they move the rest
+   threshold. Test: hit by the dragon, drinks, `28` after the last one.
+4. Equipping: `24` into a free slot, or the worn piece to the grid first; two-handed weapons, shields and ammunition
+   by the server's rules; the old piece kept only if it is still worth something. Weapon skills follow the server's
+   `F3 11`. Test: picks up the sword, wears it, a puppet gets `25`.
+5. Requirements steer the build: an upgrade in the inventory whose missing points fit in the next few levels gets
+   them first.
+6. Skills: learn looted scrolls and orbs (`26`); pick by mana, distance and targets: single (`19`), area (`1E` with
+   the `1D` report of what its effect hits, at most 5 targets per effect, like the client), the elf's heal and buffs
+   on herself, her summon, knights' weapon skills. Elves fight bare handed until a bow and arrows drop and while the
+   arrows last; buying them is a town trip. Test: a wizard learns a scroll from a fixed drop and uses it.
+7. Map progression: when the best ground is on another map, travel along the gate route (a search over the
+   entrances and their levels); respawn town by map; back to the previous map after repeated deaths. Test: a level
+   10 bot whose only ground in the test data is in Noria gets there.
+8. Optional: jewels of bless on the best worn piece up to +6, soul by the personality's risk; jewels are kept for
+   trading in B2 otherwise.
+
+## B1b bots: town trips
+
+After B1, shops are there since M5.
+
+- Sell what is worth less than its slot, buy potions and arrows / bolts, repair below a durability share (M5 wear),
+  the vault for what the bot keeps but doesn't carry.
+- Restock as an activity between survive and level: low on potions, arrows or durability, or a full grid, walks to
+  the nearest town's NPC, talks (`30`), buys / sells / repairs, closes the window, goes back to its ground.
+
+Done when: a bot that runs out of potions walks to town, sells its junk, buys potions, repairs and goes back to its
+hunting ground.
+
+## B2 bots: party, whisper, trade
+
+- Party: accept invites from players near the bot's level, follow the leader, share exp.
+- Whisper and chat: canned lines per situation, a tiny command grammar (`price X`, `buy X`, `sell X`), wts / wtb
+  ads in town chat. A language model for chat lines only, optional: async, with a timeout, never in the tick, no
+  decisions.
+- Item value: base price from the client's prices (`shop.py`), use to the bot (upgrade for its class and stats,
+  jewels it needs), market memory: the `trades` / `trade_items` log (M6), median price per item, level and options.
+- Bot to bot: a server side order book matches wants and offers, bots meet in town and trade through the real
+  `36`..`3D` flow so players see it.
+- Bot to player: trade requests arrive as events, the bot checks every change of the window against its reserve
+  price, accepts only after the other side has been unchanged for ~2 s, never takes unknown items, daily spend cap
+  per bot.
+
+Done when: a player buys an item from a bot and sells one to it in the real client; two bots trade with each other
+in Lorencia.
+
+## B3 bots: guilds, quests, events
+
+- Join and create guilds, second class quest when the career reaches it, Devil Square entry.

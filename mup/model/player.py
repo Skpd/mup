@@ -110,8 +110,9 @@ class Player:
     energy: int = 30
     free_points: int = 0
     zen: int = 0
-    pk: int = 3  # pk level, 3 is a commoner
+    pk: int = 3  # pk level, 3 is a commoner, see mup.server.pk
     pk_count: int = 0
+    pk_time: float = 0.0  # seconds in game since the pk count last changed
     quest_state: bytes = b''
     map_id: int = 0
     x: int = 128

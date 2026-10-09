@@ -11,9 +11,9 @@ BASE_CLASSES = {CharacterClass.DARK_WIZARD, CharacterClass.DARK_KNIGHT, Characte
 LORENCIA, DEVIAS, NORIA = 17, 22, 27
 START_GATE = LORENCIA
 START_GATE_BY_CLASS = {CharacterClass.ELF: NORIA}
-# where the dead come back by the map they died on: Devias for Devias, Lost Tower and Icarus, Noria for Noria,
-# Lorencia for the others. Usual rules, not from the client
-RESPAWN_GATES = {2: DEVIAS, 3: NORIA, 4: DEVIAS, 10: DEVIAS}
+# where the dead come back by the map they died on: Devias for Devias, Lost Tower and Icarus, Noria for Noria and
+# Devil Square, Lorencia for the others. Usual rules, not from the client
+RESPAWN_GATES = {2: DEVIAS, 3: NORIA, 4: DEVIAS, 9: NORIA, 10: DEVIAS}
 
 
 def valid_name(name):

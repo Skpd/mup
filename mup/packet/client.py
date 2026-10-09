@@ -28,6 +28,12 @@ from mup.packet.client_packet.npc import (Talk as Talk097, CloseWindow as CloseW
                                           ChaosClose as ChaosClose097)
 from mup.packet.client_packet.party import (PartyRequest as PartyRequest097, PartyAnswer as PartyAnswer097,
                                             PartyLeave as PartyLeave097)
+from mup.packet.client_packet.guild import (GuildRequest as GuildRequest097, GuildAnswer as GuildAnswer097,
+                                            GuildListRequest as GuildListRequest097, GuildLeave as GuildLeave097,
+                                            GuildMasterAnswer as GuildMasterAnswer097, GuildCreate as GuildCreate097,
+                                            GuildCancel as GuildCancel097)
+from mup.packet.client_packet.devil_square import DevilSquareEnter as DevilSquareEnter097
+from mup.packet.client_packet.quest import QuestStates as QuestStates097, QuestProceed as QuestProceed097
 from mup.packet.client_packet.trade import (TradeRequest as TradeRequest097, TradeAnswer as TradeAnswer097,
                                             TradeZen as TradeZen097, TradeOk as TradeOk097,
                                             TradeCancel as TradeCancel097)
@@ -75,6 +81,16 @@ CTradeAnswer = TradeAnswer097
 CTradeZen = TradeZen097
 CTradeOk = TradeOk097
 CTradeCancel = TradeCancel097
+CQuestStates = QuestStates097
+CQuestProceed = QuestProceed097
+CGuildRequest = GuildRequest097
+CGuildAnswer = GuildAnswer097
+CGuildListRequest = GuildListRequest097
+CGuildLeave = GuildLeave097
+CGuildMasterAnswer = GuildMasterAnswer097
+CGuildCreate = GuildCreate097
+CGuildCancel = GuildCancel097
+CDevilSquareEnter = DevilSquareEnter097
 
 # head, sub (None for packets without one) -> packet class
 head_code_map = {(p.code[1], p.code[2] if len(p.code) > 2 else None): p for p in (
@@ -86,6 +102,9 @@ head_code_map = {(p.code[1], p.code[2] if len(p.code) > 2 else None): p for p in
     CTalk, CCloseWindow, CBuy, CSell, CRepair, CWarehouseMoney, CWarehouseClose, CMix, CChaosClose,
     CWhisper, CPartyRequest, CPartyAnswer, CPartyLeave,
     CTradeRequest, CTradeAnswer, CTradeZen, CTradeOk, CTradeCancel,
+    CQuestStates, CQuestProceed,
+    CGuildRequest, CGuildAnswer, CGuildListRequest, CGuildLeave, CGuildMasterAnswer, CGuildCreate, CGuildCancel,
+    CDevilSquareEnter,
 )}
 
 

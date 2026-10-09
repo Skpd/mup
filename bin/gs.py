@@ -12,7 +12,11 @@ from mup.server.handler.chat import chat_handler, whisper_handler
 from mup.server.handler.close import close_handler
 from mup.server.handler.create_character import create_character_handler
 from mup.server.handler.delete_character import delete_character_handler
+from mup.server.handler.devil_square import devil_square_enter_handler
 from mup.server.handler.game_start import game_start_handler
+from mup.server.handler.guild import (guild_request_handler, guild_answer_handler, guild_list_handler,
+                                      guild_leave_handler, guild_master_answer_handler, guild_create_handler,
+                                      guild_cancel_handler)
 from mup.server.handler.key_settings import key_settings_handler
 from mup.server.handler.item import pick_up_handler, drop_item_handler, move_item_handler, use_item_handler
 from mup.server.handler.login import login_handler
@@ -25,6 +29,7 @@ from mup.server.handler.npc import (talk_handler, close_window_handler, buy_hand
                                     warehouse_money_handler, warehouse_close_handler, mix_handler, chaos_close_handler)
 from mup.server.handler.party import party_request_handler, party_answer_handler, party_leave_handler
 from mup.server.handler.ping import ping_handler
+from mup.server.handler.quest import quest_states_handler, quest_proceed_handler
 from mup.server.handler.trade import (trade_request_handler, trade_answer_handler, trade_zen_handler,
                                       trade_ok_handler, trade_cancel_handler)
 from mup.server.protocol import BaseProtocol
@@ -64,6 +69,16 @@ def create_gs(loop, cfg):
     gs.add_handler(0x40, None, party_request_handler)
     gs.add_handler(0x41, None, party_answer_handler)
     gs.add_handler(0x43, None, party_leave_handler)
+    gs.add_handler(0x50, None, guild_request_handler)
+    gs.add_handler(0x51, None, guild_answer_handler)
+    gs.add_handler(0x52, None, guild_list_handler)
+    gs.add_handler(0x53, None, guild_leave_handler)
+    gs.add_handler(0x54, None, guild_master_answer_handler)
+    gs.add_handler(0x55, None, guild_create_handler)
+    gs.add_handler(0x57, None, guild_cancel_handler)
+    gs.add_handler(0x90, None, devil_square_enter_handler)
+    gs.add_handler(0xA0, None, quest_states_handler)
+    gs.add_handler(0xA2, None, quest_proceed_handler)
     gs.add_handler(0x0E, 0x00, ping_handler)
     gs.add_handler(0xF3, 0x00, char_list_handler)
     gs.add_handler(0xF3, 0x01, create_character_handler)

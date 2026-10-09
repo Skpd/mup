@@ -3,8 +3,8 @@ import random
 from mup.model.item import RIGHT_HAND, LEFT_HAND, HELM, ARMOR, PANTS, GLOVES, BOOTS, ARROWS, BOLT
 from mup.model.monster import Monster
 from mup.packet.server import SDamage, SKill, SLife, SMana, SRespawn, SDurability, SItemDeleted
-from mup.server import (effect, experience, ground, inventory, item as items, loot, monster, stats, summon, trade,
-                        view)
+from mup.server import (devil_square, effect, experience, ground, inventory, item as items, loot, monster, pk,
+                        stats, summon, trade, view)
 from mup.server.character import respawn_gate
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ def hit_monster(proto, mob: Monster, dmg, flags=0, magic=False):
         return
 
     monster.kill(game, mob, game.now)
+    devil_square.killed(game, proto, mob)
     # who gets exp sees the last hit in 16 instead of the damage packet
     rewarded = experience.reward_kill(game, mob, proto, dmg, magic)
     for c in nearby:
@@ -51,8 +52,79 @@ def hit_monster(proto, mob: Monster, dmg, flags=0, magic=False):
         c.write(SKill(cid=mob.cid, killer=proto.cid))
     after_kill(proto)
     v = proto.player.values
-    drops = [thing + thing * v.zen_bonus // 100 if isinstance(thing, int) else thing for thing in loot.roll(game, mob)]
+    drops = [thing + thing * v.zen_bonus // 100 if isinstance(thing, int) else thing
+             for thing in loot.roll(game, mob, proto)]
     ground.drop_loot(game, mob.map_id, mob.x, mob.y, drops, proto)
+
+
+def target_of(game, c, cid):
+    """What c's player may hit by cid: a monster in view that can be attacked, or a player it may hit (mup.server.pk).
+    None otherwise."""
+    mob = game.monsters.get(cid)
+    if mob is not None:
+        return mob if not mob.dead and mob in c.view and mob.attackable else None
+    other = game.connections.get(cid)
+    return other if other is not None and other.player is not None and pk.may_hit(game, c, other) else None
+
+
+def where(target):
+    """What has the x, y of a target: the monster, or the player of a connection."""
+    return target if isinstance(target, Monster) else target.player
+
+
+def defense_rate_of(target):
+    return target.info.defense_rate if isinstance(target, Monster) else target.player.values.defense_rate
+
+
+def defense_of(target):
+    """The defense of a monster or of the player of a connection, with its greater defense."""
+    if isinstance(target, Monster):
+        return target.info.defense
+    return target.player.values.defense + effect.value(target, effect.GREATER_DEFENSE)
+
+
+def damage_taken(target, dmg, level):
+    """What a hit of dmg before defense from an attacker of level does to target: the defense taken off, at least the
+    minimum damage. A player takes its damage decrease off too, half of it all with the defense skill."""
+    dmg = max(dmg - defense_of(target), minimum_damage(level))
+    if isinstance(target, Monster):
+        return dmg
+    dmg -= dmg * target.player.values.damage_decrease // 100
+    if effect.has(target, effect.DEFENSE):
+        dmg = max(1, dmg // 2)
+    return dmg
+
+
+def hit(c, target, dmg, flags=0, magic=False):
+    """c's player's hit of dmg (after defense) reaches target, a monster or a player."""
+    if isinstance(target, Monster):
+        hit_monster(c, target, dmg, flags, magic)
+    else:
+        player_hit(c.server, c, target, dmg, flags)
+
+
+def player_hit(game, c, target, dmg, flags=0):
+    """
+    c's player hits the player of target for dmg: the damage to target and the players who see it (the attacker
+    among them), its armor wears, its reflect option hits back. Killing it counts for c's pk level.
+    """
+    t = target.player
+    pk.attacked(game, c, target)
+    t.life = max(0, t.life - dmg)
+    packet = SDamage.of(target.cid, dmg, flags)
+    target.write(packet)
+    target.write(SLife(value=t.life))
+    for o in view.viewers(game, target):
+        o.write(packet)
+    if t.life == 0:
+        logger.info('%s was killed by %s', t.name, c.player.name)
+        kill_player(game, target, c.cid, c)
+        return
+    if dmg > 0:
+        wear_armor(target, dmg)
+        reflected = dmg * t.values.reflect // 100
+        if reflected > 0 and not c.player.dead:
+            player_hit(game, target, c, reflected)
 
 
 def after_kill(c):
@@ -143,8 +215,8 @@ def worn_weapon(p, magic):
     return None
 
 
-def wear_weapon(c, mob, magic=False):
-    """c's player hit mob: its weapon wears by the monster's defense."""
+def wear_weapon(c, target, magic=False):
+    """c's player hit target: its weapon wears by the target's defense."""
     p = c.player
     slot = worn_weapon(p, magic)
     if slot is None:
@@ -154,7 +226,7 @@ def wear_weapon(c, mob, magic=False):
     if not damage_min:
         return
     limit = STAFF_WEAR if magic else BOW_WEAR if weapon.info.group == 4 else WEAPON_WEAR
-    if items.wear(weapon, mob.info.defense * 2 // (damage_min + damage_min // 2), limit):
+    if items.wear(weapon, defense_of(target) * 2 // (damage_min + damage_min // 2), limit):
         durability_lost(c, slot)
 
 
@@ -195,8 +267,9 @@ def paced(p, now, speed):
     return True
 
 
-def player_attack(game, c, mob, rng=random):
-    """c's player hits mob with its weapon (15 request): miss check, damage, ammunition."""
+def player_attack(game, c, target, rng=random):
+    """c's player hits target (a monster or a player) with its weapon (15 request): miss check, damage,
+    ammunition."""
     p = c.player
     slot = ammunition(p)
     if slot is False:
@@ -205,13 +278,13 @@ def player_attack(game, c, mob, rng=random):
     if slot is not None:
         use_ammunition(game, c, slot)
     v = p.values
-    if not hit_check(v.attack_rate, mob.info.defense_rate, rng):
-        hit_monster(c, mob, 0)
+    if not hit_check(v.attack_rate, defense_rate_of(target), rng):
+        hit(c, target, 0)
         return
     dmg, flags = roll(v, weapon_ranges(p), rng)
     dmg += effect.value(c, effect.GREATER_DAMAGE)
-    wear_weapon(c, mob)
-    hit_monster(c, mob, max(dmg - mob.info.defense, minimum_damage(p.level)), flags)
+    wear_weapon(c, target)
+    hit(c, target, damage_taken(target, dmg, p.level), flags)
 
 
 def monster_attack(game, mob: Monster, c, rng=random):
@@ -221,11 +294,7 @@ def monster_attack(game, mob: Monster, c, rng=random):
     if not hit_check(mob.info.attack_rate, v.defense_rate, rng):
         c.write(SDamage.of(c.cid, 0))
         return
-    defense = v.defense + effect.value(c, effect.GREATER_DEFENSE)
-    dmg = max(rng.randint(mob.info.damage_min, mob.info.damage_max) - defense, minimum_damage(mob.info.level))
-    dmg -= dmg * v.damage_decrease // 100
-    if effect.has(c, effect.DEFENSE):
-        dmg = max(1, dmg // 2)
+    dmg = damage_taken(c, rng.randint(mob.info.damage_min, mob.info.damage_max), mob.info.level)
     wear_armor(c, dmg, rng)
     hit_player(game, mob, c, dmg)
     reflected = dmg * v.reflect // 100
@@ -245,8 +314,9 @@ def hit_player(game, mob: Monster, c, dmg):
         kill_player(game, c, mob.cid)
 
 
-def kill_player(game, c, killer):
-    """The player of c died, killer: cid of who killed it."""
+def kill_player(game, c, killer, by=None):
+    """The player of c died, killer: cid of who killed it, by: its connection when a player did. A murderer may lose
+    an item, a player killer's pk count changes."""
     p = c.player
     p.life = 0
     p.respawn_at = game.now + RESPAWN_DELAY
@@ -258,6 +328,9 @@ def kill_player(game, c, killer):
     c.write(kill)
     for o in view.viewers(game, c):
         o.write(kill)
+    if by is not None and by.player is not None:
+        pk.killed(game, by, c)
+    pk.died(game, c)
 
 
 def respawn(game, c):

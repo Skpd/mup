@@ -6,13 +6,13 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 ## Layout
 
 - `bin/cs.py` connect server (port 44405), `bin/gs.py` game server (55901). Run from the repo root, `data/`
-  (crypto keys, the client's terrains, `Gate.bmd`, `item.bmd` and `skill.bmd`, the server's `Monster.txt` /
+  (crypto keys, the client's terrains, `Gate.bmd`, `item.bmd`, `skill.bmd` and `Quest.bmd`, the server's `Monster.txt` /
   `MonsterSetBase.txt` / `Item.txt` / `Skill.txt` and `shop/`, mup's `ChaosMix.txt`), `config.ini` and the database
   are opened with relative paths.
   `bin/account.py`: accounts (create, password, personal code, ban, GM).
 - `config.ini` (or the file in `MU_CONFIG`), read by `mup/config.py`: ports, advertised GS host, exp / drop rates,
-  database file and autosave, monster, item, skill, shop and mix data files, fixed drops, account auto creation, log
-  level, packet logging.
+  database file and autosave, monster, item, skill, shop and mix data files, fixed drops, Devil Square times, account
+  auto creation, log level, packet logging.
 - `mup/packet/`: `base.py` has `Base(bytearray)` (type, size, head, sub) and the declarative `Packet`: `code`, `size`,
   `fields` as `(offset, name, type[, default])`, `entry` for lists. Field types carry the byte order (`u16` LE,
   `u16be`, `cid` BE). `Packet(name=value)` builds, `Packet(data)` parses into attributes; list packets have an
@@ -29,11 +29,12 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   what may be worn, moves between windows, potions, scrolls), `ground.py` (items on the ground, drop, pick up),
   `loot.py` (monster drops), `npc.py` (NPC windows, talking), `shop.py` (shops, the client's prices, buy, sell,
   repair), `warehouse.py`, `chaos.py` (chaos machine mixes), `jewel.py`, `command.py` (GM commands in chat),
-  `chat.py` (chat, whispers), `party.py`, `trade.py`, `connect.py`,
+  `chat.py` (chat, whispers), `party.py`, `trade.py`, `pk.py` (player kills, pk levels, murderers), `quest.py`
+  (Sevina's quests), `guild.py`, `devil_square.py`, `connect.py`,
   `handler/*` (one per packet, registered in `bin/gs.py` / `bin/cs.py`), `character.py` (creation rules, start
   and respawn gates). Game time is `GameServer.now`, the tick passes it on.
-- `mup/model/` dataclasses. `mup/repository/`: SQLite storage (`database.py` schema migrations, account and
-  character repositories). Characters in game live in memory and are saved by `GameServer.save`.
+- `mup/model/` dataclasses. `mup/repository/`: SQLite storage (`database.py` schema migrations, account, character
+  and guild repositories). Characters in game live in memory and are saved by `GameServer.save`.
 - `mup/common/crypt.py`: C3/C4 SimpleModulus, C1/C2 xor chain (`extract` / `pack`), login field xor.
 - `docs/protocol-097.md`: the protocol as the client implements it. `docs/roadmap.md`: milestones.
 - `tools/`: protocol extraction from the client with Ghidra. `tests/client.py`: scripted client test.
@@ -44,8 +45,10 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 - `./run-gs.sh`: starts CS + GS, then a client. `./run-client.sh [client dir] [WxH] [desktop name]`: one client in a
   wine virtual desktop (native wine 9, `WINEPREFIX=~/projects/client`). Run it again for a second client.
 - Client: `~/projects/client/mu/main.exe`, patched to connect to `mu.skpd.dev:44405` (resolves to 127.0.0.1) and
-  serial `muonlineonpython`. `main.exe.orig` is the original. The other folders in `~/projects/client` are other
-  versions with other protocols.
+  serial `muonlineonpython`. `main.exe.orig` is the original. `tools/fix_client.py` fixed its `Data/Local` files
+  (`*.orig` the originals): two texts that crashed the trade and guild questions, the font (Verdana), the names left
+  in Korean. The wine prefix has `FontSmoothing` 0 (the client thresholds text to 1 bit). The other folders in
+  `~/projects/client` are other versions with other protocols.
 - Servers log at INFO. `log_packets = yes` in `config.ini` logs every packet in and out, tagged with the cid. For
   problems in the real client, ask the user to turn it on and paste the server log.
 
@@ -56,7 +59,8 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
   combat, magic, drops, picking up, wearing and dropping items, a potion, disconnect, relog, GM commands, level up
   points, skills (scrolls, area hits, poison, teleport, weapon skills, an elf's buff, arrows, summons), monsters
   chasing and killing, respawn and a gate, NPCs (shops, wear and repair, the vault across a restart, a jewel, a
-  mix, a trap), whispers, a party sharing a kill and trades, one function per area. Run it after every change and extend it with every feature. It checks raw
+  mix, a trap), whispers, a party sharing a kill and trades, player kills, the quests, a guild and a Devil Square
+  round, one function per area. Run it after every change and extend it with every feature. It checks raw
   offsets from the doc, never the packet definitions, so a wrong definition fails it.
 - The real client is the final check: ask the user to try it and paste the log.
 

@@ -47,7 +47,8 @@ to this exe.
 | quest window | text selection `0x401710`, answer click `0x401d00`, window click `0x402660`, close `0x401920`, show dialog `0x4017a0` |
 | `Dialog.bmd` in memory | `0x7c11330`, `0x400` per entry, index of the dialog shown `0x503c1c` |
 | data file loading | `0x4c09b0`: `Quest.bmd` `0x401040`, `Dialog.bmd` `0x459aa0` |
-| objects (characters, monsters, NPCs) | 400 of `0x364` bytes at `DAT_07a5f9b8`: `+0x00` in use, `+0x1ac` cid, `+0x2cd` dead, `+0x2d6` / `+0x2d7` walk target, `+0x358` / `+0x35c` tile x / y. Find by cid `0x43dc30` (400 when missing), remove all but one cid `0x43dac0` |
+| objects (characters, monsters, NPCs) | 400 of `0x364` bytes at `DAT_07a5f9b8`: `+0x00` in use, `+0x80` kind (1 player, 2 monster, 4 NPC), `+0x18c` class (class \| 2nd class << 3), `+0x191` name, `+0x1aa` guild index (`FFFF` none, into the guild list at `0x7d930cc`, `0x50` per guild, the name first), `+0x1ac` cid, `+0x2b8` guild relation (0 none, 1 own guild, 2 at war), `+0x2b9` pk level, `+0x2cd` dead, `+0x2d6` / `+0x2d7` walk target, `+0x358` / `+0x35c` tile x / y. Find by cid `0x43dc30` (400 when missing), remove all but one cid `0x43dac0`. The hero's object `DAT_07a5f9c0`, the one under the cursor index `0x4fccb4` |
+| player kills | see [PK](#pk): who may be attacked `0x460ae0`, the skill target `0x42ec10`, name colours `0x45ef10` (character window) / `0x45ef90` (names and bubbles over objects, bubble list `0x7d0e9c0`, `0x254` bytes each), guild war flag `0x57c7154` |
 | world load | `0x4bef50`: object models `0x4bd0b0`, then `Data\World{map+1}\`: `Terrain.map` (`0x4aa9c0`), `Terrain{map+1}.att` (`0x4aa820`), `terrain.obj` (`0x4b27d0`), textures, see [Maps](#maps). Current map number at `0x4fd640`, read in 51 functions |
 | hero character | pointer at `0x7c0dd1c`: `+0x0e` level, `+0x10` exp, `+0x14` str `+0x16` agi `+0x18` vit `+0x1a` ene, `+0x1c` life `+0x1e` mana `+0x20` max life `+0x22` max mana, `+0x40` next exp, `+0x60` level up points (2 bytes each, exp and next exp 4), `+0x554` money, `+0x558` the vault's zen. Kept encrypted between uses, see [Extending the client](#extending-the-client) |
 | next level exp | `0x45c980`, called by the `F3 05` handler, see [Client limits](#client-limits) |
@@ -117,14 +118,14 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C1 F3 14` item changed | `[4]` inventory slot, `[5..8]` the item placed there (`0x48d940`, below 12 equipment), the held item is gone, a sound. The answer to a jewel | code (dispatcher `0x42190a`, asm) |
 | `C1 F3 30` key settings | 18 bytes: `[4..13]` the skill number on hotkey 0..9, `FF` none: the client looks the number up in its skill list (character `+0x63`) and puts that list index on the hotkey. `[14..17]` other settings, read, not reviewed. Same layout as the client's `F3 30` | code `0x41ff50` |
 | `C1 00` chat | `[3..12]` name, `[13..72]` message (60 bytes copied). By the first byte of the message: `~` party and `@` guild go to the chat log only (in their colours, without the prefix), `#` only a bubble over the speaker, anything else a bubble and the log. See [Chat](#chat) | code `0x414960` |
-| `C1 01` object message | `[3..4]` cid, `[5..]` message, shown under the object's name (`0x45f640`, not reviewed). Not used by mup | code (dispatcher) |
+| `C1 01` object message | `[3..4]` cid (big endian, bit 15 not masked), `[5..]` the text: a bubble over the object with its name in front (`0x45f640(name, text, object, 0, -1)`), in the name colour of its pk level (NPCs 0). The object has to be in view, a missing cid reads past the object table | code (dispatcher `0x421adc`, asm), `0x45f640` |
 | `C1 02` whisper | `[3..12]` sender, `[13..72]` message (60 bytes copied). Dropped while the player turned whispers off (`/whisper off`, client only). The sender joins the 10 names a hero below level 6 may whisper to (`0x45e470`) | code (dispatcher `0x421b1f`) |
 | `C1 03` check | `[4..5]` a key, the client answers with `03` and 4 bytes from `0x408f70`. Not reviewed, not used by mup | code (dispatcher) |
 | `C1 0B` event state | the packet goes into a list of 10, `[4]` 1 sets a flag from `[3]`, then `0x4b3370`. Not reviewed | code (dispatcher) |
 | `C1 0C` whisper failed | `[3]` 0: "No users" (Text 482) under the name last whispered to, other values nothing | code (dispatcher) |
 | `C1 0D` notice | `[3]` type, `[4..]` text | code `0x414d10` (reads only) |
 | `C3 36` trade request | must be encrypted. `[3..12]` the name of who asks: the trade question (dialog 121), the held item is put back | code (dispatcher `0x42233c`) |
-| `C1 37` trade answer | 20 bytes. `[3]` 0: "Your trade has been canceled." (Text 492), 2: "You cannot trade right now." (493). 1: the trade window opens beside the inventory (other windows closed), oks and zens cleared: `[4..13]` the partner's name, `[14..15]` its level (shown as "About" 10, 50, 100 or 200), `[16..19]` its guild number (the guild mark shown) | code `0x41d1b0` |
+| `C1 37` trade answer | 20 bytes. `[3]` 0: "Your trade has been canceled." (Text 492), 2: "You cannot trade right now." (493). 1: the trade window opens beside the inventory (other windows closed), oks and zens cleared: `[4..13]` the partner's name, `[14..15]` its level (shown as "About" 10, 50, 100 or 200), `[16..19]` its guild number: the mark of the list entry with that number is shown, list entries with -1 are skipped, so `FFFFFFFF` shows none | code `0x41d1b0`, `0x4a6190` |
 | `C1 38` partner's item gone | `[3]` slot of the partner's 8 x 4 grid, a sound | code (dispatcher) |
 | `C1 39` partner's item | `[3]` slot, `[4..7]` item, placed in the partner's grid (`0x48d940`), a sound | code (dispatcher) |
 | `C1 3A` own trade zen | `[3]` 0: the own zen in the trade is 0, otherwise the amount of the client's last `3A` request. The money isn't in it (`22 FE`) | code (dispatcher) |
@@ -136,6 +137,22 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C1 42` party list | `[4]` count, then **24 bytes** each from `[5]`: `[+0..9]` name, `[+10]` index, `[+11]` map, `[+12]` x `[+13]` y, `[+16..19]` life, `[+20..23]` max life (4 bytes each). `[3]` isn't read. See [Party](#party) | code `0x41de50`, `0x4a44e0` |
 | `C1 43` party left | no fields: "You have just left the party." (502), the member count is 0 | code (dispatcher) |
 | `C1 44` party life | `[3]` count, then 1 byte each from `[4]`: member index << 4 \| life in tenths (0..10), for the bars over the members' heads | code (dispatcher), `0x47f970` |
+| `C1 50` guild join request | `[3..4]` cid of who asks (BE, not masked): the guild master is asked (dialog 119), the cid goes back in `51` | code (dispatcher `0x42259b`, asm) |
+| `C1 51` guild join result | `[3]` 0 "Guild master has refused your request..." (Text 503), 1 "You have just joined the guild." (504), 2 full (505), 3 "The user has left the game." (506), 4 "The user is not a guild master." (507), 5 "You cannot join more than one guild." (508), 6 "...too busy..." (509), 7 "Chracters over level 6 can join a guild." (510), all in the error colour | code `0x41df50` |
+| `C2 52` guild members | `[5]` count, `[8..11]` the guild's score (negative shown as 0), then **12 bytes** each from `[16]`: `[+0..9]` name, `[+10]` a number (`FF`: shown offline), `[+11]` bit 7 set: in game on server `& 0x7F` (shown as "(server + 1)"), clear: offline. The first is the master. `[4]`, `[6..7]`, `[12..15]` aren't read. See [Guilds](#guilds) | code (dispatcher `0x4225cd`, asm) |
+| `C1 53` guild leave result | `[3]` 0 "Your personal ID number is incorrect." (511), 1 "You have left the guild." (512), 2 "Only a guild master can disband a guild." (513), 3 "You have failed from the guild" (514, presumably: put out), 4 "The guild is dissolved" (515): also clears the hero's guild and its list entry. 1 and 4 close the guild window | code `0x41e110` |
+| `C1 54` guild master window | no fields: the window "Do you wish to be the guild master?" (Text 181) opens, other windows close. Answered with `54` | code (dispatcher `0x42264d`, asm) |
+| `C1 55` guild mark editor | no fields: the window goes on to the guild name and the 8 x 8 mark (the hero's guild index shows 999 meanwhile). Answered with `55` or `57` | code (dispatcher `0x4226db`, asm) |
+| `C1 56` guild create result | `[3]` 0 "The guild name already exists" (516), 1 created: the window closes, 2 "Guild name must be at least 4 bytes" (517), 3 "You are already in a guild." (518) | code `0x41ea70` |
+| `C2 5A` guilds | `[4]` count, **42 bytes** each from `[5]`: `[+0..1]` guild number BE, `[+2..9]` name, `[+10..41]` mark (64 colours, high nibble first). Each goes into the client's guild list: the entry with that name or a free one gets the number, name and mark | code `0x41e8b0`, `0x41e5b0` |
+| `C2 5B` guilds of players | `[4]` count, 4 bytes each from `[5]`: `[+0..1]` player cid, `[+2..3]` guild number BE: the player's guild is the list entry with that number (from `5A`), none found: unchanged. Sets the player's guild relation (1 the hero's guild, 2 at war) | code `0x41e900` |
+| `C1 5C` guild of a player | `[3..4]` cid, `[5..12]` guild name, `[13..44]` mark: the guild goes into the list (by name, number -1) and is the player's. Not used by mup | code `0x41e750` |
+| `C1 5D` no guild | `[3..4]` cid: the player has no guild. Also closes the hero's guild window and empties its member count, whoever the cid is | code `0x41e860` |
+| `C1 60` guild war request result | `[3]` 0..6: Text 519..525 ("That guild does not exist.", "You have declared a guild war.", "The opposing guild master is not in the game.", "That guild does not exist.", "You can't declare a guild war now.", "Only guild masters can declare a guild war.", "Your request for a guild war is refused."). Not used by mup | code `0x41eb80` |
+| `C1 61` guild war question | `[3..10]` the guild that declares, `[11]` 1 battle soccer: dialog 128, answered with `61`. Not used by mup | code `0x41eb30` |
+| `C1 62` guild war start | `[3..10]` the enemy guild, `[11]` 0 war (Text 526) / 1 battle soccer (533), `[12]` team: sets the war flag, players of the enemy guild get relation 2, the hero cheers and sends `18`. Not used by mup | code `0x41ec90` |
+| `C1 63` guild war end | `[3]` 0 lost, 1 won, 2 won (master left), 3 lost (master left), 4 won (disbanded), 5 lost (disbanded) (Text 527..532), 6 tied (480): clears the war flag. Not used by mup | code `0x41f0e0` |
+| `C1 64` guild war score | `[3]` own score, `[4]` enemy's, sets the war flag. Not used by mup | code (dispatcher `0x4227a6`, asm) |
 | `C1 0F` weather | `[3]` high nibble: 0 turns the effect off, 1 turns it on with intensity low nibble * 6, other values are ignored | code (dispatcher) |
 | `C1 10` walk | `[3..4]` cid, `[5]` x `[6]` y, `[7]` direction in the high nibble. Any object but the hero (players and monsters alike): x, y becomes its walk target and the client finds the path there from the tile it has the object on (`0x425720`), puts it on the target when there is none. The hero: x, y becomes its tile when it isn't walking. Dead objects (`17`) are ignored | code `0x414ea0` |
 | `C1 11` place | `[3..4]` cid, `[5]` x `[6]` y: puts the object on x, y without walking. mup sends it to the players who see a teleport | code `0x415250` |
@@ -171,6 +188,12 @@ handlers. On a C1 or a serial mismatch they drop the packet and the client sends
 | `C1 83` vault lock | `[3]` 0 unlocked, 1 locked, 10 / 11 / 13 messages, 12: does the move or zen request it held back while locked. Not used by mup | code `0x41dc30` |
 | `C1 86` mix result | `[3]` 1: "Chaos combining has succeeded" (Text 595), the box emptied, `[4..7]` placed in slot 0, mix state 2. 2: "Not enough Zen to combine items" (596), mix state 0. Anything else: mix state 2, nothing shown. The money isn't in it | code `0x41f960` |
 | `C1 87` close | as `82` | code `0x41fa20` |
+| `C1 90` Devil Square entry result | Closes the NPC windows and sends `C3 31` itself, then `[3]` 0 nothing (the server moves the player), 1 "Bring the Devil's invitation to enter." (Text 677), 2 "You've come too late to enter the Devil Square." (678), 3 "You're underestimating yourself. Choose another square." (686), 4 "If you wish to stay alive, choose another square." (687), 5 "Devil Square is full." (679), in a message box (`0x4c9e30`). See [Devil Square](#devil-square) | code `0x41fa70` |
+| `C1 91` Devil Square time | `[3]` 0 "You can enter Devil Square now!!" (643), otherwise "Devil Square will open in `[3]` minutes." (644), in a message box | code `0x41fec0` |
+| `C1 92` Devil Square countdown | `[3]` + 1 picks a line counting down 30 s at the bottom of the screen (`0x482760`): 0 "You will enter Devil Square (%d seconds from now)" (640), 1 "The gate of Devil Square will close down in %d seconds" (641), 2 "The gate of Devil Square is closing down (%d seconds remaining)" (642). It goes away after 30 s | code (dispatcher `0x422837`, asm), `0x45d100` |
+| `C1 93` Devil Square ranking | `[3]` the player's rank, `[4]` count, **24 bytes** each from `[5]` (at most 12): `[+0..9]` name, `[+12..15]` points, `[+16..19]` exp, `[+20..23]` zen. The window (dialog 140, `0x4ca160`) lists entries 1.. as ranks 1.., entry 0 last as "My Info" (Text 685) with the rank of `[3]`; columns Rank, Character, Cumulative points, Experience, Reward (680..684) | code `0x41ff30`, `0x4ca0e0`, `0x4ca160` (asm) |
+| `C1 94`..`96`, `99` Golden Archer | the Rena event's window (`0x7dab776`, Text 700..709: registered Rena, lucky numbers), `94` opens it with `[4..5]` a count and `[6..11]` three numbers, `95` `[4..5]` the count, `96` `[4..9]` the numbers, `99` `[3]` 0 / 1 dialogs 144 / 145; its buttons send `97` / `98` (`0x49dff0`). Located, not reviewed further, not used by mup | code `0x420240`, `0x4202a0`, `0x4202c0`, `0x4202f0` |
+| `C1 F3 08` pk level | `[4..5]` cid, `[6]` pk level, stored on the object (`+0x2b9`, its name colour). Levels 2..6 add a line to the chat log with the object's name: 2 "Hero", 3 "Commoner" (system), 4 "Warning against murderers", 5 "Murderer", 6 "Phonomania" (error colour), Text 487..491. See [PK](#pk) | code `0x41c2b0` |
 | `C1 A0` quest states | `[3]` byte count, then the state bytes (see [Quest window](#quest-window)). The client zeroes its 50 state bytes and copies `[3]` bytes, the count isn't checked against 50. Also sets the quest class from the hero's class (low 3 bits class, bit 3 second class): the only place it is set | code `0x420320`, `0x401160` |
 | `C1 A1` quest dialog | `[3]` quest index, `[4]` state byte, stored as state byte `quest >> 2`. Closes the other windows and opens the quest window with the text for the quest's state. Doesn't check which NPC is being talked to | code `0x420350`, `0x4018d0` |
 | `C1 A2` quest state result | `[3]` quest index, `[4]` result: 0 does what `A1` does with `[5]` as the state byte, anything else is ignored | code `0x420380` |
@@ -195,9 +218,10 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C1 81` vault zen | `[3]` 0 deposit, 1 withdraw, `[4..7]` the amount, xor chained. The dialog checks it against the money / the vault's zen first | code `0x4c4300` |
 | `C1 82` vault closed | 3 bytes, the client closed its windows itself (the held item put back first) | code `0x4aa5c0` |
 | `C1 86` mix | 3 bytes, after the client recognised a mix, found room in the inventory and the player agreed ("Do you want to combine your items?", Text 539). Mix state 1 until an answer | code `0x497760`, `0x49f070` |
-| `C1 87` chaos machine closed | 3 bytes, only with an empty box and no held item, otherwise Text 593. The client closed its windows itself | code `0x4aa3a0` |
+| `C1 87` chaos machine close | 3 bytes, the window's close button, only with an empty box and no held item, otherwise Text 593. The client doesn't close the window itself: it stays open until the server's `87` | code `0x4aa3a0`, `0x49f1e1` (asm), real client |
 | `C3 30` talk | `[3..4]` NPC cid. Sent when clicking an NPC of type 234 (`EA`) or higher, clicks on lower types send nothing | code `0x4650a0` |
 | `C3 A0` quest states request | no fields, sent right before `30` while the client has no quest class yet (until the first `A0` arrives) | code `0x4650a0` |
+| `C1 90` Devil Square enter | `[3]` square 0..3, `[4]` the invitation's grid tile (`y * 8 + x`) **+ 0x18**. Sent by a click on a square of Charon's window when the hero's level is in the square's range and an invitation is in the grid, otherwise the client closes the window (sending `31`) or shows the message itself, see [Devil Square](#devil-square) | code `0x49d500`, asm `0x49de3b` |
 | `C3 A2` quest proceed | `[3]` quest index, `[4]` 1. Sent by a dialog answer with return code 1 (after the client's requirement check) or 3 (no check), and by a click in an area of the quest window (`0x402660`, when it is drawn not reviewed) | code `0x401d00`, `0x402660` |
 | `C1 F3 02` delete character | `[4..13]` name of the selected character, `[14..23]` the personal code as typed in the dialog (10 byte buffer, zero padded) | code `0x4c3f40` |
 | `C1 F3 03` enter game | `[4..13]` name | traffic |
@@ -205,9 +229,9 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C1 F3 12` map loaded | 4 bytes, no fields, sent by the `1C` handler after a map change | code `0x415520` |
 | `C3 0E 00` ping | 12 bytes: `[4..7]` tick count, `[8..9]` attack speed, `[10..11]` magic speed | code `0x40e2a0`, traffic |
 | `C1 10` walk | `[3]` x `[4]` y (start of the walk), `[5]` direction << 4 \| step count, `[6..]` step directions, one per nibble, high nibble first. Sent with 0 steps to only turn | traffic |
-| `C1 15` attack | `[3..4]` target cid, `[5]` attack animation (0x64 seen), `[6]` direction | traffic, code `0x4650a0` |
+| `C1 15` attack | `[3..4]` target cid, `[5]` attack animation (0x64 seen), `[6]` direction. Players too: with Ctrl held, or a pk level 6 player without (`0x460ae0`, see [PK](#pk)). Never while the hero's name contains `webzen` | traffic, code `0x4650a0` |
 | `C1 18` animation | `[3]` direction, `[4]` animation (0x66 seen when turning) | traffic |
-| `C3 19` skill on target | `[3]` skill list index (the selected one, hero object `+0x361`), `[4..5]` target cid. Sent when the target is within the skill's distance (`skill.bmd`, tiles; knight weapon skills 19..23 1.2 times it), otherwise the hero walks there first. Knight weapon skills send a `10` turn before it. The summons (30..36) are sent as `19` too, with the hero's cid presumably (`0x57c70d4`, not reviewed), never on map 10 | code `0x462140`, `0x4650a0` |
+| `C3 19` skill on target | `[3]` skill list index (the selected one, hero object `+0x361`), `[4..5]` target cid. Sent when the target is within the skill's distance (`skill.bmd`, tiles; knight weapon skills 19..23 1.2 times it), otherwise the hero walks there first. Knight weapon skills send a `10` turn before it. The summons (30..36) are sent as `19` too, with the hero's cid presumably (`0x57c70d4`, not reviewed), never on map 10. A player is the target by the rule of `15` (`0x42ec10`) | code `0x462140`, `0x4650a0` |
 | `C3 1E` area skill | `[3]` skill list index, `[4]` x `[5]` y, `[6]` direction | code `0x46f270` |
 | `C3 1C` move through a gate | 6 bytes: `[3]` gate number, `[4]` `[5]` 0. Sent while the hero stands in the area of an entrance gate (`Gate.bmd` kind 1) of its map and its level is at least the gate's (magic gladiators: two thirds of it, class number 3), else the client shows the level message. At most every 3 s and only one until a `1C` answer arrives. Gates 45..49, 55, 56 also need the hero not riding a Horn of Uniria / Dinorant (items `0x1A2` / `0x1A3`), 62..65 a check not reviewed | code `0x474030` |
 | `C3 1C` teleport | 6 bytes: `[3]` 0, `[4]` x `[5]` y, the target tile. Sent for the teleport skill (6) when the target tile's attribute is 0 (no safe zone, wall or anything), at most every 3 s and one until the `1C` answer, not riding (13/2 check, not reviewed). The answer is `1C` with `[3]` 0 | code `0x46f270` |
@@ -222,6 +246,14 @@ Everything else the client handles is listed in appendix A with the offsets its 
 | `C3 40` party request | `[3..4]` target cid. `/party` (Text 256) typed in chat like `/trade`, only for a leader or someone without a party ("You are already in a party", Text 257) | code `0x46a340` |
 | `C3 41` party answer | `[3]` 1 yes, 0 no, `[4..5]` the cid of `40` (BE) | code `0x4c4300` |
 | `C1 43` party leave | `[3]` member index: the X beside a member in the party window, shown beside every member for the leader (member 0), beside itself for the others | code `0x49c5b0` |
+| `C1 50` guild join | `[3..4]` cid of the guild master (BE). `/guild` (Text 254) typed in chat at the player under the cursor or the one next to the hero (within 1 tile, facing it), not while the guild window holds members ("You are already in a guild", Text 255) | code `0x46a340` |
+| `C1 51` guild join answer | `[3]` 1 yes, 0 no, `[4..5]` the cid of `50` (BE), from dialog 119 | code `0x4c4300` |
+| `C1 52` guild members | 3 bytes: the guild window opened (G, `0x4779b0`), the member count waits at -1 for the answer | code `0x4779b0`, asm `0x47cd47` |
+| `C1 53` guild leave | `[3..12]` the member's name, `[13..22]` the personal code typed in dialog 126. The X of the guild window: the master's beside every member ("Disband" on its own row, Text 188, "Withdraw" on the others, 189), a member's beside its own name | code `0x4c4300`, `0x49b9e0`, `0x4a5310` |
+| `C1 54` guild master answer | `[3]` 1 yes, 0 no (the window closes) | code `0x49b9e0` |
+| `C1 55` guild create | 43 bytes: `[3..10]` guild name (the name input), `[11..42]` the mark, 64 colours high nibble first. The client checks the name input first (dialogs 115 and 123, not reviewed) and wants a colour in the mark (dialog 127) | code `0x49b9e0` |
+| `C1 57` guild create cancel | 3 bytes: the window closed at the mark editor, the hero's guild index back to none | code `0x49b9e0` |
+| `C1 61` guild war answer | `[3]` 1 yes, 0 no, from dialog 128. Not used by mup | code `0x4c4300` |
 | `C3 22` pick up | `[3..4]` item id BE. Sent when the hero is within 150 units of the item (1.5 tiles from the tile centre, the client walks there first) and the item fits in the grid (zen always), one at a time until `22` answers | code `0x4650a0` |
 | `C3 23` drop | `[3]` x `[4]` y (the tile under the mouse), `[5]` the slot the held item came from | code `0x497760` |
 | `C3 24` move | 11 bytes: `[3]` source window, `[4]` source slot, `[5..8]` the item as the client has it, `[9]` target window, `[10]` target slot. Windows and slots as in the result, the warehouse and the chaos machine while their window is open (into the box only mix materials, see [Chaos machine](#chaos-machine)). One at a time until `24` answers. The client also sends it on its own: arrows / bolts from the grid into a hand when a bow / crossbow has none (`0x463d60`), the left hand item to the right hand (`0x474ac0`) | code `0x422db0` |
@@ -303,7 +335,13 @@ not reviewed), so a ported map can only show monster types this client has. Map 
 **Types**: `group * 32 + index`, 0..511, 16 groups.
 
 **`Data\Local\item.bmd`** (files, code `0x45a270` reads the fields): 512 records of 56 bytes xor `FC CF AB`, then
-4 bytes (a checksum, not checked). In memory as they are, pointer at `0x7c85330`. Copied to `data/item.bmd`.
+4 bytes: a checksum the client checks (`0x45a100`, key `0xE2F1`, see below; "%s - File corrupted." and it quits).
+In memory as they are, pointer at `0x7c85330`. Copied to `data/item.bmd`.
+
+**Checksum** of `item.bmd` and `skill.bmd` (code `0x4584c0(data, size, key)`, real client): over the records as
+stored (xored), 4 byte little endian words w at offset i: start with `key << 9`; for word n = i / 4, `acc ^= w` when
+`(n + key)` is even, else `acc += w`; then, when `i % 16 == 0`, `acc ^= (acc + key) >> (n % 8 + 1)` (32 bit). The 4
+bytes after the records must equal it. A changed record needs a new checksum (`tools/fix_client.py` writes it).
 
 | offset | field |
 |---|---|
@@ -439,8 +477,8 @@ level above, + 15 for excellent items. This is less than the full durability of 
 
 ## Skills
 
-`Data\Local\skill.bmd` (files, code): 64 records of 38 bytes + 4, xor `FC CF AB` with the key restarting at every
-record, the record index is the skill number. Kept in memory at the pointer `0x7c45a48`, encrypted with another key
+`Data\Local\skill.bmd` (files, code): 64 records of 38 bytes, xor `FC CF AB` with the key restarting at every
+record, the record index is the skill number, then the 4 byte checksum (`0x4596e0`, key `0x5A18`, as `item.bmd`'s). Kept in memory at the pointer `0x7c45a48`, encrypted with another key
 between uses (`0x45cb20`). Copied to `data/skill.bmd`.
 
 | offset | |
@@ -472,7 +510,7 @@ The `30` answer picks the window, the inventory opens beside it. What the server
 |---|---|---|---|
 | shop | `[3]` 0 | `31` with the goods | close buttons and hotkeys, nothing sent |
 | warehouse | `[3]` 2 | `31` with the items, `81` with the zen | close button and hotkeys: puts the held item back, sends `82` |
-| chaos machine | `[3]` 3, `[4..7]` rates | nothing (the box is as the client left it) | only an empty box: sends `87` |
+| chaos machine | `[3]` 3, `[4..7]` rates | nothing (the box is as the client left it) | only an empty box: sends `87`, closes on the server's `87` |
 
 The server's `82` / `87` close every NPC window and the inventory (the held item is dropped from the cursor). `F3 04`
 closes them too (`0x413b00` calls `0x48cd10`), a `1C` map change clears the warehouse flag and repair mode
@@ -529,7 +567,7 @@ into `0x7dab7b4`) and shows its name (Text 601..605, 612), rate and zen (`0x4a77
 | mix | items | rate | zen |
 |---|---|---|---|
 | 1 chaos weapon | a jewel of chaos and at least one weapon / armor from +4 with an option, maybe bless, soul, more chaos or a horn of uniria that isn't full, nothing else | the box's buy prices / 20000, at most 100 | 10000 per % |
-| 2 Devil Square invitation | 3 items: chaos, a Devil's eye and key of the same level (other levels: -2, Text 600) | level 1: 60, 2..5: the `30` rates | 10000, 10000, 20000, 40000, 70000 by level |
+| 2 Devil Square invitation | 3 items: chaos, a Devil's eye and key of the same level (other levels: -2, Text 600) | level 1: 60, 2..5: the `30` rates, level 0: none shown (it still mixes) | 10000, 10000, 20000, 40000, 70000 by level, none for 0 |
 | 3 +10 | 4 items: chaos, bless, soul and a +9 item (below `0x183`) | 50, 75 with luck | 2 000 000 |
 | 4 +11 | 6 items: chaos, 2 bless, 2 soul and a +10 item | 45, 70 with luck | 4 000 000 |
 | 5 Dinorant | 4 items: chaos and 3 horns of uniria at full durability | 70 | 250 000 |
@@ -537,7 +575,9 @@ into `0x7dab7b4`) and shows its name (Text 601..605, 612), rate and zen (`0x4a77
 Luck is that of the last +9 / +10 item or weapon / armor from +4 the client looked at (slot order). The mix button
 (`0x49f070`) needs mix state 0 and a recognised mix: none shows "You are lacking items." (580), then it checks for a free
 area in the inventory (`0x49b380` with 5 and 4 for the chaos weapon mix, otherwise the box's widest and tallest item,
-not reviewed further; Text 581) and asks (Text 539) before `86`. The mix state (`0x7dab78c`): 0 ready, 1 mixing (no items in or out of the box), from 2 it counts up every frame
+not reviewed further; Text 581) and asks (Text 539) before `86`. An `86` answer other than 1 and 2 leaves the button
+dead with the items in the box, and the window doesn't close until they are taken out (Text 593): a server that won't
+mix answers 0 with the box (`31`), "Chaos combining has failed" (real client). The mix state (`0x7dab78c`): 0 ready, 1 mixing (no items in or out of the box), from 2 it counts up every frame
 as the box is drawn (an animation up to `0x33`), so after a mix the button works again only when the window opens
 again (`30`) or after `86` 2.
 
@@ -588,6 +628,51 @@ makes the ok button ask), `0x7dab75c` frames before the ok button works again.
 5. The end: `3D` closes everything. The client keeps neither grid: the inventory comes with `F3 10`, the money with
    `22 FE`.
 
+## Guilds
+
+From code. The client keeps a list of 1000 guilds at `0x7d930c8`, `0x50` bytes each: `+0` number (-1 unknown), `+4`
+name (8 bytes and a 0), `+0xd` the mark, one colour index per byte. `5A` and `5C` put guilds in it by name; a
+player's guild (`+0x1aa`) is the index into it, set by `5B` (by number) or `5C`, reset by `5D` and when the object is
+created (`0x43dc70`). The mark is drawn beside the name and in the guild and trade windows (`0x4a4c00`), 8 x 8 of 16
+colours (ABGR): 0 transparent, 1 black, 2 grey, 3 white, 4 red, 5 orange, 6 yellow, 7 yellow green, 8 green, 9 spring
+green, 10 cyan, 11 azure, 12 blue, 13 violet, 14 magenta, 15 rose.
+
+- Creating: the guild master NPC (241) gets no `30` window, the server answers `30` with `54`. Yes (`54` 1) brings
+  `55` and the editor: a name input and the mark painted with the mouse, OK sends `55` with both, the server answers
+  `56`. Cancel sends `57`. The open flag is `0x7dab775`, the page `0x7dab790` (0 the question, 1 the editor); `82`
+  doesn't close it.
+- Joining: `/guild` at a master sends `50`, the master gets `50` and answers `51`, the asker gets `51` with the
+  result. The master's question needs the `Text.bmd` fix, see [Extending the client](#extending-the-client). Usual: from level 6, a master's guild holds its level / 10 members.
+- The guild window (G, open flag `0x7dab76c`): `52` asks for the members, the title is "%s (Score:%d)" with the
+  hero's guild and `52`'s score, or "Guild" (Text 180) without one; no members shows how to join (Text 185..187). The
+  master (member 0) is drawn with the mark. An X sends `53` after dialog 126 asks for the personal code.
+- Guild chat: `@` lines (log type 5). Guild war (`60`..`64`) marks the enemy guild's players (relation 2): they can
+  be attacked with a click (see [PK](#pk)).
+
+## Devil Square
+
+From code. Charon (237) opens the window with `30` `[3]` 4 (open flag `0x7dab774`, the inventory beside it). It
+shows four squares, "The %d Square (%d-%d level)" / "(Over %d level)" (Text 645, 646), with the levels of the table
+at `0x4fcf4c` (files):
+
+| square | levels |
+|---|---|
+| 1 | 10..99 |
+| 2 | 100..179 |
+| 3 | 180..249 |
+| 4 | 250..99999 |
+
+A click on a square (`0x49d500`), with nothing held: the hero's level (a magic gladiator's counts as
+`(level + 1) / 2 * 3`) above the square's: the window closes, `31`, Text 686. Below: the same with Text 687. In range:
+the first Devil's invitation (14/19) of level 0 in the grid, else one of level square + 1 (`0x4606f0`, searched from
+the last tile), none: Text 677; found: `90` with the square and the tile. The server answers `90`, the client closes
+its windows and sends `31` on any answer.
+
+`92` counts down 30 s on screen, `93` shows the ranking. Charon's other texts are NPC chat (Text 650..675, 661 "the
+gate of Devil Square has opened again"). The arrival areas are gates 58..61 of `Gate.bmd` (map 9), one per square.
+The invitation comes from the chaos machine (see [Chaos machine](#chaos-machine)) with a Devil's eye and key of the
+same level 1..5.
+
 ## Client limits
 
 From code, values the client holds or shows:
@@ -635,8 +720,54 @@ window titles of cheat tools (`GameHack 2.0`, `Speed Hack - PCGameHacks.com`), n
   (`0x403dc0`). Other tables are kept the same way (`0x45cb20`). Code that reads hero values has to do the same.
 
 **Without code**: the interface textures (`Data/Interface/*.OZJ` / `.OZT`, loaded at `0x4bf4e0` and `0x4c09b0`),
-the texts in `Text.bmd` (800 entries of 300 bytes), and the windows the server opens: the
-[quest window](#quest-window), notices `0D`, chat.
+the texts in `Text.bmd` (800 entries of 300 bytes, `tools/text_bmd.py`), and the windows the server opens: the
+[quest window](#quest-window), notices `0D`, chat. `tools/fix_client.py` applies the fixes below.
+
+**Text** (code `0x40f2c0`, `0x4bfe60`, `0x45d6e0`). Three GDI fonts (`CreateFontA`): normal and bold of height
+11 / 12 / 13 / 14 px at 640 / 800 / 1024 / 1280 wide (the table value - 1), a big bold one of twice that; the face is
+`Text.bmd` entry 0 (empty: none, the system picks), charset 1. Resolution 4 (1600x1200, registry
+`HKCU\Software\Webzen\Mu\Config\Resolution` 0..4) sets no height: unusable for text. Text is drawn white on black
+into a 24 bit DIB and turned into a texture with every non black pixel in the text colour: antialiased glyphs come
+out fat, crisp 1 bit glyphs need font smoothing off (wine: `HKCU\Control Panel\Desktop` `FontSmoothing` "0").
+
+**Korean names** (files): the Chinese translation left 30 `item.bmd` names in Korean (0/17, 0/18, 4/17, 5/9, the sets
+7..11/17..20, 12/7, 13/3, 14/21, 14/23..26), skill 42 in `skill.bmd` and quest 0's name in `Quest.bmd`; the client
+shows them as garbage.
+
+**Text.bmd bugs** (code, real client): the English entries 419 "%s would like to trade with you." and 429 "%s guild
+wants you to join their guild." are the second lines of the trade question (dialog 121, `0x4c91d1`) and the guild
+join question (dialog 119, `0x4c95be`), formatted with `sprintf` and **no argument** (the first line, Text 418 "%s",
+has the name). The `%s` reads a pointer off the stack: the guild question crashed the client (page fault at
+`0x4eb456`). `tools/fix_client.py` drops the `%s` ("would like to trade with you.", "wants to join your
+guild."). Of the texts `sprintf` gets without an argument, these two are the only ones with a `%`.
+
+## PK
+
+From code. The pk level of each object is at `+0x2b9`: `12` `[+30]` low nibble, `F3 03` `[40]` for the hero, `F3 08`
+for any player. The name over a player, its chat bubble and the hero's name in the character window take the colour
+of the level (`0x45ef10`, `0x45ef90`, ABGR):
+
+| level | colour | `F3 08` line |
+|---|---|---|
+| 0 | `96 FF F0` light green | |
+| 1 | `64 78 FF` blue | |
+| 2 | `8C B4 FF` light blue | Hero (Text 487) |
+| 3 | `C8 DC FF` white | Commoner (488) |
+| 4 | `FF 96 3C` orange | Warning against murderers (489) |
+| 5 | `FF 50 1E` red orange | Murderer (490) |
+| 6 and up | `FF 00 00` red, and the character glows red (`+0x2f0..+0x2f8` = 1, 0.1, 0.1, `0x43b95a`) | Phonomania (491) |
+
+**Attacking a player** (`0x460ae0`, the object under the cursor). Monsters (kind 2) always, players (kind 1) of pk
+level 6 and up with a click, the others only while Ctrl is held (`GetAsyncKeyState(VK_CONTROL)`) and not the hero.
+The attack is the usual `15` with the player's cid, skills `19` (`0x42ec10` picks the target by the same rule), area
+skills report the targeted player in `1D`. While the guild war flag (`0x57c7154`) is set, players whose guild relation
+(`+0x2b8`) is 2 can be attacked with a click, and murderers of the hero's own guild not at all.
+
+The client checks nothing else (no safe zone, no level), the server decides. Usual 0.97 rules mup follows
+(`mup/server/pk.py`): players from level 6 hit each other outside safe zones; a kill of a non murderer who didn't
+attack first counts one up (level 3 + count, 4..6), a kill of a murderer makes a hero (2..0); murderers lose items when
+they die, shops refuse them and guards attack them from level 5. Text.bmd 487..491 are the only names the client has
+for the levels.
 
 ## Quest window
 
@@ -670,6 +801,18 @@ Both action codes send the same packet, the server can't tell answers apart, onl
 
 `Quest.bmd`: 200 entries of 584 bytes, the entry index is the quest index of `A0`..`A2`. Used: 0 "Find the Scroll
 of Emperor" (14/23), 1 "Three Treasures of Mu" (14/24, 14/25, 14/26 per class).
+
+What the two quests want (files, the client's `Quest.bmd` and `Dialog.bmd`):
+
+| quest | condition | requirements | dialogs: not started, in progress, item found, done |
+|---|---|---|---|
+| 0 | 14/23 x 1 for dark wizards, knights, elves (group 0), magic gladiators (group 1) | level 150, 1 000 000 zen; group 1: level 10000 (dialog 73 "You already possess great power") | 52 (53 "I will go find it.", answer code 1), 54, 55 ("Tell me about the record.", code 3), 56..59 |
+| 1 | 14/24 knights (60, 61, 62, 72), 14/25 elves (64, 65, 66, 72), 14/26 wizards (67, 68, 69, 72) | 2 000 000 zen (dialog 71) | per class as listed, 72 "New power has been bestowed upon you" for all |
+
+Failing requirements: level 50, zen 51 / 71. The dialogs don't name a reward: the usual ones (the later server's
+`QuestReward.txt`, files) are 10 level up points (`A3 C8`) for quest 0, 10 points and the class change (`A3 C9`) for
+quest 1. The quest items drop for a player with the quest accepted from monsters of level 45..60 (14/23) and 62..76
+(the treasures), 1% (`QuestObjective.txt`).
 
 | offset | |
 |---|---|

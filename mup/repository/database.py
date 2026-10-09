@@ -177,6 +177,10 @@ MIGRATIONS = [
     CREATE INDEX trade_items_trade ON trade_items (trade_id);
     CREATE INDEX trade_items_type ON trade_items (type);
     """,
+    # roadmap M7: seconds in game since the pk count last changed, it goes back to 0 with them (mup.server.pk)
+    """
+    ALTER TABLE characters ADD COLUMN pk_time REAL NOT NULL DEFAULT 0;
+    """,
 ]
 
 

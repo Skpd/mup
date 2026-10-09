@@ -27,6 +27,10 @@ class Config:
     skill_info: str = 'data/Skill.txt'  # area radius, effect and classes of the skills, server file of a later version
     shops: str = 'data/shop'  # ShopManager.txt and the shops' items, server files of a later version
     mixes: str = 'data/ChaosMix.txt'  # rates and zen of the chaos machine's mixes
+    devil_square_times: str = '00:30 04:30 08:30 12:30 16:30 20:30'  # when rounds start, local time
+    devil_square_entry: float = 300.0  # seconds Charon lets players in before a round
+    devil_square_length: float = 1200.0  # seconds a round lasts
+    devil_square_close: float = 10.0  # seconds the ranking shows before everyone goes back to Noria
     auto_create_accounts: bool = True  # the first login with an unknown account name creates it
     personal_code: str = '1111111'  # personal code of auto created accounts, deleting a character asks for it
     log_level: str = 'INFO'

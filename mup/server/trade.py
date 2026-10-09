@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass
 from mup.packet.server import (SMoveItemResult, SPartnerZen, SPickUpResult, STradeAnswer, STradeEnd, STradeItem,
                                STradeItemGone, STradeOk, STradeRequest, STradeZen)
-from mup.server import inventory
+from mup.server import guild, inventory
 from mup.server.ground import MAX_ZEN
 from mup.server.world import distance
 
@@ -94,8 +94,9 @@ def answer(game, c, yes):
         return
     t.open = True
     for side in t.sides:
-        p = t.partner(side.c).c.player
-        side.c.write(STradeAnswer(result=STradeAnswer.OPEN, name=p.name, level=p.level))
+        partner = t.partner(side.c).c
+        side.c.write(STradeAnswer(result=STradeAnswer.OPEN, name=partner.player.name, level=partner.player.level,
+                                  guild=guild.number(partner)))
     logger.info('%s and %s trade', asker.player.name, c.player.name)
 
 

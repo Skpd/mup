@@ -1,11 +1,13 @@
 """
 What monsters drop. Random drops by the rates of Monster.txt: an item when rand(ItemRate) < ITEM_CHANCE (times the
 drop rate), else zen when rand(MoneyRate) < ZEN_CHANCE, the shape of the usual servers with mup's numbers. Fixed
-drops per monster type from the item_drops file roll on top of that, each line on its own.
+drops per monster type from the item_drops file roll on top of that, each line on its own, the item of the killer's
+quest (mup.server.quest) and the Devil's eyes and keys (mup.server.devil_square).
 """
 import random
 from collections import defaultdict, namedtuple
 from mup.model.item import GROUP_SIZE, ZEN
+from mup.server import devil_square, quest
 
 ITEM_CHANCE = 10
 ZEN_CHANCE = 10
@@ -37,9 +39,9 @@ def load_fixed(path, item_info):
     return dict(drops)
 
 
-def roll(game, mob):
-    """The loot of a monster game killed: Items and zen amounts."""
-    loot = []
+def roll(game, mob, killer):
+    """The loot of a monster killer (a connection) killed: Items and zen amounts."""
+    loot = quest.loot(game, mob, killer) + devil_square.loot(game, mob)
     for d in game.fixed_drops.get(mob.type_id, ()):
         if random.random() * 100 < d.chance:
             if d.type == ZEN:

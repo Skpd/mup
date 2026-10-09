@@ -47,6 +47,11 @@ class BaseProtocol(Protocol):
         self.trade = None  # the trade asked for or open, mup.server.trade.Trade
         self.party = None  # mup.server.party.Party
         self.party_question = None  # (connection, time) of who asked to party last, mup.server.party
+        self.self_defense = {}  # connection -> until when its player may be hit back without a pk count, mup.server.pk
+        self.pk_clock = 0.0  # game clock of the last pk time update, mup.server.pk
+        self.guild = None  # mup.server.guild.Guild of the player in game
+        self.guild_question = None  # (connection, time) of who asked to join last, mup.server.guild
+        self.known_guilds = set()  # guild numbers the client was shown (5A), mup.server.view
 
     @property
     def tag(self):

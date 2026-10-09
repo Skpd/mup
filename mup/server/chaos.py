@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # what the client recognises (0x49b680), its numbers
 IMPROPER, CHAOS_WEAPON, INVITATION, PLUS10, PLUS11, DINORANT = 0, 1, 2, 3, 4, 5
 LEVELS_DIFFER = -2  # a Devil's eye and key of different levels
-NAMES = {'chaos': CHAOS_WEAPON, 'plus10': PLUS10, 'plus11': PLUS11, 'dinorant': DINORANT}
+NAMES = {'chaos': CHAOS_WEAPON, 'invitation': INVITATION, 'plus10': PLUS10, 'plus11': PLUS11, 'dinorant': DINORANT}
 CLIENT = -1  # the data file's value for the client's own rate / zen
 RATE_PER_ZEN = 20000  # the chaos weapon mix: 1% per 20000 zen of the items' prices, at most 100%
 ZEN_PER_RATE = 10000
@@ -27,8 +27,13 @@ CHAOS_WEAPONS = (2 * GROUP_SIZE + 6, 4 * GROUP_SIZE + 6, 5 * GROUP_SIZE + 7)  # 
 FIRST_WINGS = (12 * GROUP_SIZE, 12 * GROUP_SIZE + 1, 12 * GROUP_SIZE + 2)
 JEWELS = (shop.JEWEL_OF_CHAOS, shop.JEWEL_OF_BLESS, shop.JEWEL_OF_SOUL)
 OPTION_LINES = (shop.DAMAGE_OPTION, shop.MAGIC_OPTION, shop.BLOCK_OPTION, shop.DEFENSE_OPTION)
-# the client's Devil Square invitation rates for levels 2..5 the 30 answer carries, its own defaults (M7)
+# the Devil Square invitation by the level of its eye and key (0..5): the client shows 60% for level 1, the rates of
+# the 30 answer for levels 2..5 (its own defaults), and the zen by level (0x4a7760). It shows nothing for level 0
+# but mixes it, its Devil Square window takes a level 0 invitation for every square: level 1's rate and zen, mup's
+INVITATION_RATE = 60
 INVITATION_RATES = bytes([80, 75, 70, 60])
+INVITATION_ZEN = (10000, 10000, 20000, 40000, 70000)
+INVITATION_LEVELS = range(0, 6)
 
 
 @dataclass(frozen=True)
@@ -91,7 +96,9 @@ def recognize(box):
 
     count = len(box)
     if count == 3 and chaos == 1 and eyes == 1 and keys == 1:
-        return (INVITATION if eye_level == key_level else LEVELS_DIFFER), lucky
+        if eye_level != key_level:
+            return LEVELS_DIFFER, lucky
+        return (INVITATION if eye_level in INVITATION_LEVELS else IMPROPER), lucky
     if count == 4 and chaos == 1 and plus9 == 1 and bless == 1 and soul == 1:
         return PLUS10, lucky
     if count == 4 and chaos == 1 and unirias == 3:
@@ -110,6 +117,11 @@ def rate_and_zen(game, mix, lucky, box):
         client = min(100, sum(shop.value(item) for item in box.values()) // RATE_PER_ZEN)
         rate = client if info.rate == CLIENT else info.rate
         zen = client * ZEN_PER_RATE if info.zen == CLIENT else info.zen
+    elif mix == INVITATION:
+        level = max(1, invitation_level(box))
+        client = INVITATION_RATE if level == 1 else INVITATION_RATES[level - 2]
+        rate = client if info.rate == CLIENT else info.rate
+        zen = INVITATION_ZEN[level - 1] if info.zen == CLIENT else info.zen
     else:
         rate, zen = info.rate, info.zen
     if lucky:
@@ -117,12 +129,24 @@ def rate_and_zen(game, mix, lucky, box):
     return min(rate, 100), zen
 
 
+def invitation_level(box):
+    return next(item.level for item in box.values() if item.type == shop.DEVILS_EYE)
+
+
+def rates(game):
+    """The invitation rates for levels 2..5 the 30 answer shows: the data file's, else the client's own."""
+    info = game.mixes.get(INVITATION)
+    if info is None or info.rate == CLIENT:
+        return INVITATION_RATES
+    return bytes([min(100, info.rate)] * 4)
+
+
 def open_box(game, c):
     """c's player talks to the chaos goblin: the window, and the box when the client may show something else."""
     p = c.player
     if p.chaos_box:
         return_items(game, c)
-    c.write(STalk(window=STalk.CHAOS_MACHINE, rates=INVITATION_RATES))
+    c.write(STalk(window=STalk.CHAOS_MACHINE, rates=rates(game)))
     if p.chaos_box or c.stale_box:
         # the client shows it with "Chaos combining has failed", the only way to put items in its box
         c.write(SItemList.of(SItemList.CHAOS_BOX, p.chaos_box))
@@ -153,15 +177,22 @@ def is_open(c):
     return c.window is not None and c.window.kind == STalk.CHAOS_MACHINE
 
 
+
 def mix(game, c, rng=random):
     """86: c's player mixes what is in the box. Zen first (22 FE), then 86 with the result, after a failure the box
-    as it is left (31)."""
+    as it is left (31). A mix mup doesn't make fails with the box untouched: any other answer leaves the client's
+    mix button dead, and the window doesn't close with items in the box."""
     p = c.player
     box = p.chaos_box
     kind, lucky = recognize(box)
-    if p.dead or not is_open(c) or kind not in game.mixes:
-        logger.debug('%s: mix %s refused', p.name, kind)
+    if p.dead or not is_open(c):
+        logger.debug('%s: mix refused, the machine isn\'t open', p.name)
         c.write(SMixResult(result=SMixResult.REFUSED))
+        return False
+    if kind not in game.mixes:
+        logger.info('%s: no mix of %s', p.name, list(box.values()))
+        c.write(SMixResult(result=SMixResult.FAILED))
+        c.write(SItemList.of(SItemList.CHAOS_BOX, box))
         return False
     rate, zen = rate_and_zen(game, kind, lucky, box)
     if zen > p.zen:
@@ -228,4 +259,10 @@ def dinorant(game, box, rate, rng):
     return game.new_item(game.item_info[DINORANT_HORN])
 
 
-RESULTS = {CHAOS_WEAPON: chaos_weapon, PLUS10: level_up, PLUS11: level_up, DINORANT: dinorant}
+def invitation(game, box, rate, rng):
+    """A Devil's invitation of the eye and key's level."""
+    return game.new_item(game.item_info[shop.DEVILS_INVITATION], level=invitation_level(box))
+
+
+RESULTS = {CHAOS_WEAPON: chaos_weapon, INVITATION: invitation, PLUS10: level_up, PLUS11: level_up,
+           DINORANT: dinorant}

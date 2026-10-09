@@ -14,7 +14,7 @@ class Talk(Packet):
         (4, 'rates', Raw(4), NONE),
     )
 
-    SHOP, WAREHOUSE, CHAOS_MACHINE = 0, 2, 3
+    SHOP, WAREHOUSE, CHAOS_MACHINE, DEVIL_SQUARE = 0, 2, 3, 4
 
 
 class ItemList(Packet):

@@ -10,13 +10,15 @@ notice to the GM only.
 /move map x y       to x, y of a map
 /skill n            learns skill number n
 /heal               full life and mana
+/pk n               pk count n (-3..100), the pk level follows it
+/ds                 Devil Square: Charon lets players in now, the round starts after the configured entry time
 """
 import logging
 from mup.model.account import GM
 from mup.model.item import GROUP_SIZE
 from mup.model.player import MAX_LEVEL, level_exp
 from mup.packet.server import SAnnouncement, SLevelUp, SLife, SMana, SMapMove, SRespawn
-from mup.server import inventory, skill, stats
+from mup.server import devil_square, inventory, pk, skill, stats
 from mup.server.ground import MAX_ZEN
 
 logger = logging.getLogger(__name__)
@@ -52,7 +54,7 @@ def run(game, c, message):
     except Refused as e:
         answer = str(e)
     logger.info('%s: %s -> %s', c.player.name, message, answer)
-    c.write(SAnnouncement(message=answer))
+    c.write(SAnnouncement(message=answer.encode('latin-1', 'replace').decode('latin-1')))
 
 
 def between(value, low, high, what):
@@ -135,4 +137,16 @@ def heal(game, c):
     return 'healed'
 
 
-COMMANDS = {'level': level, 'points': points, 'zen': zen, 'item': item, 'move': move, 'skill': learn, 'heal': heal}
+def pk_count(game, c, n):
+    pk.set_count(game, c, between(n, pk.MIN_COUNT, pk.MAX_COUNT, 'pk count'))
+    return 'pk count {}, level {}'.format(n, c.player.pk)
+
+
+def devil_square_now(game, c):
+    if not devil_square.start_now(game):
+        raise Refused('Devil Square is open or running')
+    return 'Devil Square is open'
+
+
+COMMANDS = {'level': level, 'points': points, 'zen': zen, 'item': item, 'move': move, 'skill': learn, 'heal': heal,
+            'pk': pk_count, 'ds': devil_square_now}

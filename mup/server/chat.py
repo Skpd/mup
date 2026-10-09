@@ -1,16 +1,15 @@
 """
 Chat (00) and whispers (02), see the Chat section of docs/protocol-097.md. A line goes to every player in game under
-the speaker's name, the speaker too (the client doesn't show its own). ~ lines go to the party only, @ lines (guild)
-wait for M7. A whisper reaches a player by name on any map, 0C tells the sender nobody has it.
+the speaker's name, the speaker too (the client doesn't show its own). ~ lines go to the party only, @ lines to the
+guild. A whisper reaches a player by name on any map, 0C tells the sender nobody has it.
 """
 import logging
 from mup.packet.server import SChat, SWhisper, SWhisperFailed
-from mup.server import party
+from mup.server import guild, party
 
 logger = logging.getLogger(__name__)
 
 MESSAGE_SIZE = 60  # bytes the client copies, the zero included
-GUILD = '@'
 
 
 def line(message):
@@ -26,8 +25,9 @@ def say(game, c, message):
         if party.chat(game, c, packet):
             logger.info('Party %s: %s', p.name, message)
         return
-    if message.startswith(GUILD):
-        logger.debug('%s: guild chat comes with M7', p.name)
+    if message.startswith(guild.CHAT):
+        if guild.chat(game, c, packet):
+            logger.info('Guild %s: %s', p.name, message)
         return
     logger.info('Say %s: %s', p.name, message)
     for o in game.playing():

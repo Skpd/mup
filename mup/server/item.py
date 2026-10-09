@@ -23,7 +23,8 @@ MANA = {14 * GROUP_SIZE + 4: 20, 14 * GROUP_SIZE + 5: 30, 14 * GROUP_SIZE + 6: 4
 
 
 def load_info(bmd_path, txt_path=None):
-    """Item type -> ItemInfo, from the client's item.bmd and the server's Item.txt (skill, options, drops)."""
+    """Item type -> ItemInfo, from the client's item.bmd and the server's Item.txt (skill, options, drops, the name
+    of the items item.bmd names in Korean)."""
     data = open(bmd_path, 'rb').read()
     if len(data) < BMD_RECORD * BMD_COUNT:
         raise ValueError('{}: {} bytes, too short for {} items'.format(bmd_path, len(data), BMD_COUNT))
@@ -35,7 +36,9 @@ def load_info(bmd_path, txt_path=None):
         name = r[:30].split(b'\0', 1)[0]
         if not name:
             continue
-        skill, options, drops = server.get(n, (False, False, False))
+        skill, options, drops, txt_name = server.get(n, (False, False, False, None))
+        if not name.isascii() and txt_name:
+            name = txt_name.encode('latin-1')
         info[n] = ItemInfo(
             type=n, name=name.decode('cp949', errors='replace'), two_handed=bool(r[30]), level=r[31],
             width=r[32], height=r[33], damage_min=r[34], damage_max=r[35], defense_rate=r[36], defense=r[37],
@@ -46,7 +49,8 @@ def load_info(bmd_path, txt_path=None):
 
 
 def _load_txt(path):
-    """Item type -> (skill, options, drops) of a later server's Item.txt, the types this client has (index < 32)."""
+    """Item type -> (skill, options, drops, name) of a later server's Item.txt, the types this client has (index <
+    32)."""
     values = {}
     group = None
     with open(path, encoding='latin-1') as f:
@@ -60,7 +64,7 @@ def _load_txt(path):
                 group = int(v[0])
             elif int(v[0]) < GROUP_SIZE:
                 # Index Slot Skill Width Height HaveSerial HaveOption DropItem Name ...
-                values[group * GROUP_SIZE + int(v[0])] = (v[2] != '0', v[6] != '0', v[7] != '0')
+                values[group * GROUP_SIZE + int(v[0])] = (v[2] != '0', v[6] != '0', v[7] != '0', v[8])
     return values
 
 

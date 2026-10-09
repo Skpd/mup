@@ -9,6 +9,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import List
 from mup.packet.server import SPartyLeft, SPartyList, SPartyLife, SPartyRequest, SPartyResult
+from mup.server import pk
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ def request(game, c, cid):
     party = c.party
     if other is None or other.player is None or not other.playing or other not in c.view:
         result = SPartyResult.GONE
-    elif other is c or p.dead or party is not None and party.leader is not c:
+    elif other is c or p.dead or party is not None and party.leader is not c or pk.refused(c) or pk.refused(other):
         result = SPartyResult.FAILED
     elif party is not None and len(party.members) >= MAX_MEMBERS:
         result = SPartyResult.FULL
@@ -74,7 +75,7 @@ def answer(game, c, yes, cid):
     result = None
     if c.party is not None:
         result = SPartyResult.IN_PARTY
-    elif party is not None and party.leader is not asker:
+    elif party is not None and party.leader is not asker or pk.refused(c) or pk.refused(asker):
         result = SPartyResult.FAILED
     elif party is not None and len(party.members) >= MAX_MEMBERS:
         result = SPartyResult.FULL

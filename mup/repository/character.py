@@ -11,8 +11,8 @@ COLUMNS = {
     'account_id': 'account_id', 'slot': 'index', 'name': 'name', 'level': 'level', 'exp': 'exp',
     'level_up_points': 'free_points', 'str': 'strength', 'agi': 'agility', 'vit': 'vitality', 'ene': 'energy',
     'life': 'life', 'mana': 'mana', 'zen': 'zen', 'map': 'map_id', 'x': 'x', 'y': 'y', 'dir': 'direction',
-    'pk_level': 'pk', 'pk_count': 'pk_count', 'ctl_code': 'role_code', 'quest_state': 'quest_state',
-    'key_settings': 'key_settings',
+    'pk_level': 'pk', 'pk_count': 'pk_count', 'pk_time': 'pk_time', 'ctl_code': 'role_code',
+    'quest_state': 'quest_state', 'key_settings': 'key_settings',
 }
 SAVED = [c for c in COLUMNS if c not in ('account_id', 'slot', 'name')]  # what changes in game
 ITEM_COLUMNS = ('level', 'durability', 'skill', 'luck', 'option', 'excellent')  # stored as the Item attributes

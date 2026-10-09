@@ -15,6 +15,7 @@ SINGLE_SPREAD = 3  # a single monster appears within this many tiles of its spot
 NPC, AREA, SINGLE = 0, 1, 2
 # the NPCs and traps this client has (Data/Local/NpcName(Eng).txt), the later file's others are left out
 TRAPS = range(100, 104)
+GUARDS = (247, 249)  # they attack murderers (mup.server.pk), in town too
 NPC_TYPES = {*TRAPS, 200, *range(235, 256)}
 
 
@@ -36,9 +37,9 @@ def load_info(path):
     return info
 
 
-def load_spawns(path, info):
-    """Spawns on the maps of SPAWN_MAPS: NPCs and traps of the types this client has, monsters in areas and single
-    ones."""
+def load_spawns(path, info, maps=SPAWN_MAPS):
+    """Spawns on maps (SPAWN_MAPS: the world): NPCs and traps of the types this client has, monsters in areas and
+    single ones."""
     spawns = []
     section = None
     unknown = Counter()
@@ -58,7 +59,7 @@ def load_spawns(path, info):
                 continue
 
             number, map_id, leash = int(v[0]), int(v[1]), int(v[2])
-            if map_id not in SPAWN_MAPS:
+            if map_id not in maps:
                 continue
             if number not in info:
                 unknown[number] += 1

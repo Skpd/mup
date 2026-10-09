@@ -59,7 +59,8 @@ def gone(game, mob):
 
 
 def owner_attacks(c, target):
-    """c's player attacks target, a monster: its summon goes for it too."""
+    """c's player attacks target: its summon goes for it too when it is a monster (summons leave players alone,
+    mup's choice)."""
     mob = c.summon
-    if mob is not None and target is not mob and target.attackable:
+    if mob is not None and isinstance(target, Monster) and target is not mob and target.attackable:
         mob.target = target

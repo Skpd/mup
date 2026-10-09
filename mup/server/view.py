@@ -1,12 +1,12 @@
 """
 What each client has in view. c.view holds the players (connections), monsters and ground items the client of c was
 shown with 12 / 13 / 20 and not yet removed with 14 / 21, so nothing is shown twice or left behind. Players see each
-other both ways.
+other both ways, with their guilds (5A for the guilds the client doesn't know yet, 5B).
 """
 from mup.model.item import GroundItem
 from mup.model.monster import Monster
-from mup.packet.server import (SClear, SMeetMonster, SMeetPlayer, SMeetSummon, SMove, SGroundItems, SGroundZen,
-                               SItemsGone)
+from mup.packet.server import (SClear, SGuildInfos, SGuildMembers, SMeetMonster, SMeetPlayer, SMeetSummon, SMove,
+                               SGroundItems, SGroundZen, SItemsGone)
 from mup.server.world import VIEW_RANGE, distance
 
 CHUNK = 100  # entries per packet: 14 is a C1 packet, 125 cids at most
@@ -31,6 +31,7 @@ def show(c, objects, dropped=False):
     ground = [o for o in new if isinstance(o, GroundItem)]
     if players:
         _send(c, SMeetPlayer.of, [(o.cid, o.player) for o in players])
+        guilds(c, players)
     if monsters:
         _send(c, SMeetMonster.of, monsters)
     if summons:
@@ -42,6 +43,19 @@ def show(c, objects, dropped=False):
     if zen:
         _send(c, lambda chunk: SGroundZen.of(chunk, dropped), zen)
     c.view.update(new)
+
+
+def guilds(c, players):
+    """The guilds of players (connections) to c's client: 5A for those it doesn't know yet, 5B for who is in one
+    (an object the client creates has none)."""
+    members = [o for o in players if o.guild is not None]
+    if not members:
+        return
+    new = {o.guild.id: o.guild for o in members if o.guild.id not in c.known_guilds}
+    if new:
+        _send(c, SGuildInfos.of, list(new.values()))
+        c.known_guilds.update(new)
+    _send(c, SGuildMembers.of, [(o.cid, o.guild.id) for o in members])
 
 
 def hide(c, objects):

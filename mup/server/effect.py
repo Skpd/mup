@@ -72,23 +72,27 @@ def clear(game, obj):
 
 def tick(game, now):
     """Poison hurts, effects run out."""
-    from mup.server import combat
+    from mup.server import combat, pk
     for obj in list(game.affected):
         holder = holder_of(obj)
-        if holder is None or getattr(obj, 'dead', False):
+        if holder is None or holder.dead:
             game.affected.discard(obj)
             continue
         for number, e in list(holder.effects.items()):
-            if number == POISON and now >= e.next_at and isinstance(obj, Monster):
+            if number == POISON and now >= e.next_at:
                 e.next_at = now + POISON_INTERVAL
                 source = e.source if e.source is not None and e.source.player is not None else None
-                if source is not None:
+                if source is None:
+                    pass
+                elif isinstance(obj, Monster):
                     combat.hit_monster(source, obj, max(1, obj.life * POISON_DAMAGE // 100), magic=True)
-                if obj.dead:
+                elif pk.may_hit(game, source, obj):
+                    combat.player_hit(game, source, obj, max(1, holder.life * POISON_DAMAGE // 100))
+                if holder.dead:
                     break
             if now >= e.until:
                 end(game, obj, number)
-        if not holder.effects or getattr(obj, 'dead', False):
+        if not holder.effects or holder.dead:
             game.affected.discard(obj)
 
 

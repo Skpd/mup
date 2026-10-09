@@ -193,11 +193,15 @@ class Fields:
 
 
 class Entry:
-    """List at the end of a packet: count is (offset, type) of the entry count, the entries follow it."""
+    """List at the end of a packet: count is (offset, type) of the entry count, the entries follow it, or start at
+    start when fields come between."""
 
-    def __init__(self, count, size, fields):
+    def __init__(self, count, size, fields, start=None):
         self.count_offset, self.count_type = count
-        self.start = self.count_offset + self.count_type.size
+        self.count_end = self.count_offset + self.count_type.size
+        self.start = self.count_end if start is None else start
+        if self.start < self.count_end:
+            raise TypeError('entry: the entries start before the count ends')
         self.size = size
         self.fields = Fields('entry', fields, 0, size)
 
@@ -207,7 +211,7 @@ class Entry:
         return buf
 
     def unpack(self, data):
-        n = self.count_type.unpack(data[self.count_offset:self.start])
+        n = self.count_type.unpack(data[self.count_offset:self.count_end])
         if len(data) < self.start + n * self.size:
             raise ValueError('{} entries of {} bytes don\'t fit in {} bytes'.format(n, self.size, len(data)))
 
@@ -242,8 +246,10 @@ class Packet(Base):
         if cls.entry is not None:
             if cls.size is not None or cls._fields.variable:
                 raise TypeError('{}: a packet with entries has no size and no variable size field'.format(name))
-            if cls.entry.count_offset < cls._fields.end:
-                raise TypeError('{}: the entry count overlaps the fields'.format(name))
+            e = cls.entry
+            if any(offset < e.count_end and e.count_offset < offset + kind.size
+                   for offset, _, kind in cls._fields.fields) or cls._fields.end > e.start:
+                raise TypeError('{}: the entry count overlaps the fields or they run into the entries'.format(name))
         elif cls.size is None and not cls._fields.variable:
             raise TypeError('{}: a fixed size packet needs a size'.format(name))
 
@@ -270,7 +276,7 @@ class Packet(Base):
         tail, values = self._fields.pack_into(type(self).__name__, buf, values)
         if self.entry is not None:
             entries = list(entries or ())
-            buf[self.entry.count_offset:self.entry.start] = self.entry.count_type.pack(len(entries))
+            buf[self.entry.count_offset:self.entry.count_end] = self.entry.count_type.pack(len(entries))
             for e in entries:
                 buf += self.entry.pack(e)
             self.entries = entries

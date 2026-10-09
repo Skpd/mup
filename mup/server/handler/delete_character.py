@@ -3,6 +3,7 @@ import logging
 from mup.error import NotFoundError
 from mup.packet.client_packet.char_delete import CharDelete
 from mup.packet.server import SCharDeleted
+from mup.server import guild
 from mup.server.protocol import BaseProtocol
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ def delete_character_handler(msg: CharDelete, proto: BaseProtocol):
     elif not hmac.compare_digest(msg.personal_code.encode('latin-1'), proto.acc.personal_code.encode('latin-1')):
         result = SCharDeleted.WRONG_CODE
     else:
+        guild.character_deleted(proto.server, p.id)  # a master's guild goes before its master
         characters.delete(p)
         result = SCharDeleted.OK
     logger.info('%s deletes %s: result %s', proto.acc.name, msg.name, result)

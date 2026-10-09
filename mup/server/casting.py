@@ -79,21 +79,22 @@ def skill_damage(p, info, rng=random):
     return dmg, flags
 
 
-def hit(game, c, mob, info, rng=random):
-    """A damaging skill reaches mob: miss check, damage less the defense, the skill's effect."""
+def hit(game, c, target, info, rng=random):
+    """A damaging skill reaches target, a monster or a player: miss check, damage less the defense, the skill's
+    effect."""
     p = c.player
-    if not combat.hit_check(p.values.attack_rate, mob.info.defense_rate, rng):
-        combat.hit_monster(c, mob, 0, magic=True)
+    if not combat.hit_check(p.values.attack_rate, combat.defense_rate_of(target), rng):
+        combat.hit(c, target, 0, magic=True)
         return False
     dmg, flags = skill_damage(p, info, rng)
     dmg += effect.value(c, effect.GREATER_DAMAGE)
-    combat.wear_weapon(c, mob, magic=bool(info.damage))
-    combat.hit_monster(c, mob, max(dmg - mob.info.defense, combat.minimum_damage(p.level)), flags, magic=True)
-    if not mob.dead:
+    combat.wear_weapon(c, target, magic=bool(info.damage))
+    combat.hit(c, target, combat.damage_taken(target, dmg, p.level), flags, magic=True)
+    if not combat.where(target).dead:
         if info.number == effect.POISON:
-            effect.apply(game, mob, effect.POISON, effect.POISON_TIME, source=c)
+            effect.apply(game, target, effect.POISON, effect.POISON_TIME, source=c)
         elif info.number == effect.ICE:
-            effect.apply(game, mob, effect.ICE, effect.ICE_TIME)
+            effect.apply(game, target, effect.ICE, effect.ICE_TIME)
     return True
 
 
@@ -104,7 +105,6 @@ def on_target(game, c, index, target_cid):
     info = cast(game, c, index)
     if info is None:
         return
-    mob = game.monsters.get(target_cid)
     player = game.connections.get(target_cid)
     applied = False
     if info.number in SUMMONS:
@@ -116,11 +116,14 @@ def on_target(game, c, index, target_cid):
             applied = buff(game, c, target, info)
     elif info.number in NO_DAMAGE:
         logger.debug('%s: %s isn\'t used on a target', p.name, info.name)
-    elif mob is not None and not mob.dead and mob in c.view and mob.attackable and in_reach(p, mob, info):
-        summon.owner_attacks(c, mob)
-        applied = hit(game, c, mob, info)
     else:
-        logger.debug('%s: %s on %s out of reach or not in view', p.name, info.name, target_cid)
+        # a monster, or a player (mup.server.pk)
+        target = combat.target_of(game, c, target_cid)
+        if target is not None and in_reach(p, combat.where(target), info):
+            summon.owner_attacks(c, target)
+            applied = hit(game, c, target, info)
+        else:
+            logger.debug('%s: %s on %s out of reach or not in view', p.name, info.name, target_cid)
 
     animation = SMagic.of(info.number, c.cid, target_cid, applied)
     c.write(animation)
@@ -172,7 +175,7 @@ def on_area(game, c, index, x, y, direction):
 
 def area_hits(game, c, index, x, y, serial, cids):
     """1D: an area skill's effect landed at x, y and reached cids. Counted for a skill cast with 1E a moment ago,
-    for monsters in view within its radius, each once per effect."""
+    for monsters in view and players c may hit within its radius, each once per effect."""
     p = c.player
     number = p.skill(index)
     a = c.area_casts.get(number)
@@ -184,13 +187,16 @@ def area_hits(game, c, index, x, y, serial, cids):
         logger.debug('%s: %s landed at %s,%s, far from %s,%s', p.name, a.skill.name, x, y, a.x, a.y)
         return
     for cid in cids:
-        mob = game.monsters.get(cid)
-        if mob is None or mob.dead or mob not in c.view or not mob.attackable or (serial, cid) in a.hit:
+        target = combat.target_of(game, c, cid)
+        if p.dead:
+            break
+        if target is None or (serial, cid) in a.hit:
             continue
-        if distance(mob.x, mob.y, x, y) > radius:
+        at = combat.where(target)
+        if distance(at.x, at.y, x, y) > radius:
             continue
         a.hit.add((serial, cid))
-        hit(game, c, mob, a.skill)
+        hit(game, c, target, a.skill)
 
 
 def teleport(game, c, x, y):
