@@ -1,7 +1,7 @@
 # mup: MU Online 0.97 server in Python
 
 Hobby / learning project: a private server for the old MU Online 0.97 client (0.97b Chs, version `09704`).
-Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, one milestone per session.
+Python 3.15 venv (uv), asyncio, no framework. Work is planned in `docs/roadmap.md`, one milestone per session.
 
 ## Layout
 
@@ -77,7 +77,7 @@ Python 3.10 venv, asyncio, no framework. Work is planned in `docs/roadmap.md`, o
 - `./venv/bin/python tests/client.py`: starts its own CS and GS with a test config (ports 44415 / 55911, packet
   logging on, its own monster and drop files), plays two clients through login, character creation, walking, chat,
   combat, magic, drops, picking up, wearing and dropping items, a potion, disconnect, relog, GM commands, level up
-  points, skills (scrolls, area hits, poison, teleport, weapon skills, an elf's buff, arrows, summons), monsters
+  points, skills (scrolls, area hits, poison, teleport, weapon skills, an elf's buff, triple shot, arrows, summons), monsters
   chasing and killing, respawn and a gate, NPCs (shops, wear and repair, the vault across a restart, a jewel, a
   mix, a trap), whispers, a party sharing a kill and trades, player kills, the quests, a guild and a Devil Square
   round, and last a bot made with `bin/account.py` buying potions from Amy with its zen, hunting and wearing a drop

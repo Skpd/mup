@@ -5,10 +5,11 @@ and Character values in docs/protocol-097.md) and the usual 0.97 rules otherwise
 """
 import logging
 import random
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Set, Tuple
 from mup.packet.server import SMagic, SMagicAOE, SMana, SLife, SMapMove, SPlace
-from mup.server import combat, effect, stats, summon, view
+from mup.server import combat, effect, skill, stats, summon, view
 from mup.server.world import distance
 
 logger = logging.getLogger(__name__)
@@ -21,16 +22,20 @@ NO_DAMAGE = {TELEPORT, TELEPORT_PARTY, *BUFFS, *SUMMONS}
 LAG = 2  # tiles allowed over a skill's distance or radius, mup's choice
 AREA_TIME = 3.0  # seconds an area cast takes 1D reports for its effects
 TELEPORT_PAUSE = 3.0  # the client teleports at most every 3 s
+# skills that shoot arrows, how many a cast shoots: each reports what it reaches with the cast's serial (0x447d60)
+SHOTS = {skill.TRIPLE_SHOT: 3}
 
 
 @dataclass
 class AreaCast:
-    """An area skill cast with 1E: its 1D reports count until expires_at, each target once per effect serial."""
+    """An area skill cast with 1E: its 1D reports count until expires_at, each target once per effect serial. The
+    arrows of a cast share its serial: as many hits as it shoots (SHOTS), on any targets."""
     skill: object
     x: int
     y: int
     expires_at: float
     hit: Set[Tuple[int, int]] = field(default_factory=set)  # (serial, cid)
+    shots: Counter = field(default_factory=Counter)  # serial -> arrows that hit
 
 
 def cast(game, c, index):
@@ -175,7 +180,8 @@ def on_area(game, c, index, x, y, direction):
 
 def area_hits(game, c, index, x, y, serial, cids):
     """1D: an area skill's effect landed at x, y and reached cids. Counted for a skill cast with 1E a moment ago,
-    for monsters in view and players c may hit within its radius, each once per effect."""
+    for monsters in view and players c may hit within its radius, each once per effect; an arrow skill's cast hits
+    as often as it shoots arrows, all on one target up close."""
     p = c.player
     number = p.skill(index)
     a = c.area_casts.get(number)
@@ -186,16 +192,20 @@ def area_hits(game, c, index, x, y, serial, cids):
     if distance(x, y, a.x, a.y) > radius:
         logger.debug('%s: %s landed at %s,%s, far from %s,%s', p.name, a.skill.name, x, y, a.x, a.y)
         return
-    for cid in cids:
+    shots = SHOTS.get(number)
+    for cid in dict.fromkeys(cids):
         target = combat.target_of(game, c, cid)
-        if p.dead:
+        if p.dead or shots is not None and a.shots[serial] >= shots:
             break
-        if target is None or (serial, cid) in a.hit:
+        if target is None or shots is None and (serial, cid) in a.hit:
             continue
         at = combat.where(target)
         if distance(at.x, at.y, x, y) > radius:
             continue
-        a.hit.add((serial, cid))
+        if shots is None:
+            a.hit.add((serial, cid))
+        else:
+            a.shots[serial] += 1
         hit(game, c, target, a.skill)
 
 

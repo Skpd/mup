@@ -156,6 +156,9 @@ end
 1
 //Monster      MapNumber      Range      BeginPosX      BeginPosY      EndPosX      EndPosY      Direction      Quantity      Comment
 003            03             30         139            063            247          164          -1             60            //Spider
+
+001            03             30         170            055            180          065          -1             12            //Test spawn
+
 026            03             30         109            046            154          181          -1             10            //Goblin
 026            03             30         136            156            247          204          -1             10            //Goblin
 026            03             30         135            042            247          073          -1             10            //Goblin

@@ -349,7 +349,7 @@ class Brain:
                 if around is None:
                     around = sum(1 for o in c.view if isinstance(o, Monster) and o.attackable and not o.dead
                                  and distance(o.x, o.y, mob.x, mob.y) <= AREA_REACH)
-                rate *= min(around, AREA_TARGETS)
+                rate *= min(around, casting.SHOTS.get(s.number, AREA_TARGETS))
             if rate > most:
                 best, most = s.number, rate
         return best

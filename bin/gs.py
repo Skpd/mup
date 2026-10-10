@@ -36,7 +36,7 @@ async def main(loop, cfg):
 if __name__ == '__main__':
     cfg = config.load()
     config.setup_logging(cfg)
-    main_loop = asyncio.get_event_loop()
+    main_loop = asyncio.new_event_loop()
     gs, t = main_loop.run_until_complete(main(main_loop, cfg))
 
     # ctrl-c and kill save the characters in game before exiting
@@ -47,5 +47,4 @@ if __name__ == '__main__':
     logger.info('Shutting down')
     t.close()
     gs.shutdown()
-    main_loop.run_until_complete(t.wait_closed())
     main_loop.close()

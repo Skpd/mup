@@ -1162,7 +1162,7 @@ def skills(t):
           'F3 30 after the skill list: her hotkeys by skill number, FF for none: ' + p.hex(' '))
     b3.recv_until(listed(0x12, a.cid), what='B sees A back')
 
-    print('an elf: greater damage on B, arrows, a miss')
+    print('an elf: greater damage on B, triple shot, arrows, a miss')
     check(logout(a, 1)[4] == 1, 'A goes to character select')
     check(create(a, 'Elfa', 32)[4] == 1, 'A creates an elf')
     enter(a, 'Elfa')
@@ -1194,15 +1194,31 @@ def skills(t):
     check(arrows[2] == 255, 'a stack of 255 arrows')
     check(move_item(a, bow_slot, bow, 1)[4] == 1 and move_item(a, arrows_slot, arrows, 0)[4] == 0,
           'the bow in the left hand, the arrows in the right')
+    a.send(chat('Elfa', '/skill 24'))
+    check(skill_change(a) == (0xFE, 2, 24), 'triple shot (24) into slot 2')
+    a.send(chat('Elfa', '/heal'))  # the summon took the mana
+    notice(a, 'healed')
     a.send(chat('Elfa', '/move 0 {} {}'.format(*spot)))
     a.recv_until(key(0x1C), what='GM move')
-    (dodger, _), = meet(a, 7)
+    (dodger, dodger_xy), = meet(a, 7)
+    time.sleep(ATTACK_PAUSE)
+    a.send([0xC1, 0, 0x1E, 2, *dodger_xy, 0], encrypt=True)
+    p = a.recv_until(key(0x1E), what='triple shot animation')
+    check(p[3] == 24 and (p[4] << 8 | p[5]) == a.cid, 'the elf shoots triple shot at the dodger (1E)')
+    p = a.recv_until(key(0x2A), what='triple shot arrow')
+    check((p[3], p[4]) == (0, 254), 'it takes an arrow: 2A slot 0, 254 left')
+    a.inbox.clear()
+    for i in range(4):  # up close each arrow lands on the dodger and reports it with the cast's serial
+        a.send([0xC1, 0, 0x1D, 2, *dodger_xy, 1, 1, dodger >> 8, dodger & 0xFF], encrypt=True)
+    chat_round_trip(a, 'Elfa')
+    check(sum(map(of(0x15, dodger), a.inbox)) == 3, 'three of the 1D reports of serial 1 hit the dodger (15), '
+          'a fourth arrow doesn\'t')
     misses = 0
     for i in range(5):
         time.sleep(ATTACK_PAUSE)
         a.send([0xC1, 0, 0x15, dodger >> 8, dodger & 0xFF, 0x64, 0x00])
         p = a.recv_until(key(0x2A), what='arrow shot')
-        check(len(p) == 6 and (p[3], p[4]) == (0, 254 - i), 'a shot takes an arrow: 2A slot 0, {} left'.format(254 - i))
+        check(len(p) == 6 and (p[3], p[4]) == (0, 253 - i), 'a shot takes an arrow: 2A slot 0, {} left'.format(253 - i))
         misses += damage(a.recv_until(of(0x15, dodger), what='shot')) == 0
     check(misses > 0, 'the dodger, defense rate 100000, takes 5% of the hits: {} of 5 missed (15 with 0)'.format(misses))
     p = a.recv_until(lambda p: of(0x18, goblin)(p) and (p[7] << 8 | p[8]) == dodger, timeout=8, what='summon attacks')
